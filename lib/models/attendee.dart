@@ -16,5 +16,14 @@ class Attendee extends HiveObject {
   @HiveField(3)
   String time;
 
-  Attendee({required this.rollNumber, required this.batch, required this.department, required this.time});
+  @HiveField(4) // ✅ Add this new field
+  String eventName;
+
+  Attendee({
+    required this.rollNumber,
+    required this.batch,
+    required this.department,
+    required this.time,
+    required this.eventName, // ✅ Ensure event name is required
+  });
 }

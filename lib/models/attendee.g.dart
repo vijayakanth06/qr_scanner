@@ -21,13 +21,14 @@ class AttendeeAdapter extends TypeAdapter<Attendee> {
       batch: fields[1] as String,
       department: fields[2] as String,
       time: fields[3] as String,
+      eventName: fields[4] as String,
     );
   }
 
   @override
   void write(BinaryWriter writer, Attendee obj) {
     writer
-      ..writeByte(4)
+      ..writeByte(5)
       ..writeByte(0)
       ..write(obj.rollNumber)
       ..writeByte(1)
@@ -35,7 +36,9 @@ class AttendeeAdapter extends TypeAdapter<Attendee> {
       ..writeByte(2)
       ..write(obj.department)
       ..writeByte(3)
-      ..write(obj.time);
+      ..write(obj.time)
+      ..writeByte(4)
+      ..write(obj.eventName);
   }
 
   @override

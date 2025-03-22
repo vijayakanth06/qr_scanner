@@ -7,7 +7,6 @@ import '../utils/data_parser.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 
-
 class EventScreen extends StatefulWidget {
   final String eventName;
 
@@ -52,72 +51,77 @@ class _EventScreenState extends State<EventScreen> {
       batch: batch,
       department: department,
       time: time,
+      eventName: widget.eventName, // ✅ Ensure event name is saved
     );
 
-    attendeeBox?.add(newAttendee); // Ensure box is not null
+    attendeeBox?.add(newAttendee); // ✅ Save attendee
     setState(() {});
     _showMessage('Saved: Roll: $rollNumber | Batch: $batch | Dept: $department | Time: $time');
   }
 
+  List<Attendee> getAttendeesForEvent() {
+    if (attendeeBox == null) return [];
+    return attendeeBox!.values
+        .where((attendee) => attendee.eventName == widget.eventName) // ✅ Filter by event name
+        .toList();
+  }
+
   Future<void> exportToExcel() async {
-  if (attendeeBox == null || attendeeBox!.isEmpty) {
-    _showMessage('No data to export');
-    return;
+    List<Attendee> attendees = getAttendeesForEvent();
+    if (attendees.isEmpty) {
+      _showMessage('No data to export');
+      return;
+    }
+
+    if (await Permission.manageExternalStorage.request().isGranted ||
+        await Permission.storage.request().isGranted) {
+      List<Map<String, String>> data = attendees.map((attendee) => {
+            'rollNumber': attendee.rollNumber.toString(),
+            'batch': attendee.batch.toString(),
+            'department': attendee.department.toString(),
+            'time': attendee.time.toString(),
+          }).toList();
+
+      String filePath = await ExcelService.generateExcel(data, widget.eventName);
+      _showMessage('Excel file saved at: $filePath');
+    } else {
+      _showMessage('Storage permission denied');
+      openAppSettings();
+    }
   }
-
-  // Request permission for Android 11+
-  if (await Permission.manageExternalStorage.request().isGranted ||
-      await Permission.storage.request().isGranted) {
-    
-    List<Map<String, String>> data = attendeeBox!.values.map((attendee) => {
-          'rollNumber': attendee.rollNumber.toString(),
-          'batch': attendee.batch.toString(),
-          'department': attendee.department.toString(),
-          'time': attendee.time.toString(),
-        }).toList();
-
-    String filePath = (await ExcelService.generateExcel(data, widget.eventName)); 
-
-    _showMessage('Excel file saved at: $filePath');
-  } else {
-    _showMessage('Storage permission denied');
-    openAppSettings(); // Opens settings for manual permission
-  }
-}
 
   void _showMessage(String message) {
-  final overlay = Overlay.of(context);
-  final overlayEntry = OverlayEntry(
-    builder: (context) => Positioned(
-      top: kToolbarHeight + 10,
-      left: 20,
-      right: 20,
-      child: Material(
-        color: Colors.transparent,
-        child: Container(
-          padding: EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: Colors.blueAccent,
-            borderRadius: BorderRadius.circular(8),
-            boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 4)],
-          ),
-          child: Text(
-            message,
-            style: TextStyle(color: Colors.white, fontSize: 19, fontWeight: FontWeight.bold),
-            textAlign: TextAlign.center,
+    final overlay = Overlay.of(context);
+    final overlayEntry = OverlayEntry(
+      builder: (context) => Positioned(
+        top: kToolbarHeight + 10,
+        left: 20,
+        right: 20,
+        child: Material(
+          color: Colors.transparent,
+          child: Container(
+            padding: EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.blueAccent,
+              borderRadius: BorderRadius.circular(8),
+              boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 4)],
+            ),
+            child: Text(
+              message,
+              style: TextStyle(color: Colors.white, fontSize: 19, fontWeight: FontWeight.bold),
+              textAlign: TextAlign.center,
+            ),
           ),
         ),
       ),
-    ),
-  );
+    );
 
-  overlay.insert(overlayEntry);
+    overlay.insert(overlayEntry);
 
-  Future.delayed(const Duration(seconds: 3), () {
-    overlayEntry.remove();
-  });
-}
-
+    Future.delayed(const Duration(seconds: 3), () {
+      overlayEntry.remove();
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -136,14 +140,14 @@ class _EventScreenState extends State<EventScreen> {
                 child: ValueListenableBuilder(
                   valueListenable: Hive.box<Attendee>('attendees').listenable(),
                   builder: (context, Box<Attendee> box, _) {
-                    if (box.isEmpty) {
+                    List<Attendee> attendees = getAttendeesForEvent(); // ✅ Filtered attendees
+                    if (attendees.isEmpty) {
                       return const Center(child: Text('No attendees yet.'));
                     }
                     return ListView.builder(
-                      itemCount: box.length,
+                      itemCount: attendees.length,
                       itemBuilder: (context, index) {
-                        final attendee = box.getAt(index);
-                        if (attendee == null) return const SizedBox.shrink();
+                        final attendee = attendees[index];
                         return ListTile(
                           title: Text('Roll: ${attendee.rollNumber}'),
                           subtitle: Text('Batch: ${attendee.batch} | Dept: ${attendee.department}'),
