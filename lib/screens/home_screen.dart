@@ -21,11 +21,8 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _initializeBox() async {
-    if (!Hive.isBoxOpen('events')) {
-      await Hive.openBox<Event>('events');
-    }
-    eventBox = Hive.box<Event>('events');
-    setState(() {}); // Ensure UI updates
+    eventBox = await Hive.openBox<Event>('events');
+    setState(() {});
   }
 
   Future<void> createEvent(String name, String venue) async {
@@ -36,11 +33,23 @@ class _HomeScreenState extends State<HomeScreen> {
     );
 
     await eventBox.add(event);
-    setState(() {}); // Refresh UI after adding
+    setState(() {}); // Refresh UI
   }
 
   void deleteEvent(int index) {
+    final event = eventBox.getAt(index);
+    if (event == null) return;
+
+    final attendeeBox = Hive.box('attendees');
+    attendeeBox.deleteAll(
+      attendeeBox.keys.where((key) {
+        final attendee = attendeeBox.get(key);
+        return attendee != null && attendee.eventName == event.name;
+      }).toList(),
+    );
+
     eventBox.deleteAt(index);
+    _showMessage('Event "${event.name}" deleted.');
     setState(() {}); // Refresh UI
   }
 
@@ -49,6 +58,10 @@ class _HomeScreenState extends State<HomeScreen> {
       context,
       MaterialPageRoute(builder: (_) => const SettingsScreen()),
     ).then((_) => setState(() {}));
+  }
+
+  void _showMessage(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
   }
 
   @override
@@ -63,17 +76,16 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ],
       ),
-      body: ValueListenableBuilder(
+      body: ValueListenableBuilder<Box<Event>>(
         valueListenable: eventBox.listenable(),
-        builder: (context, Box<Event> box, _) {
-          if (box.isEmpty) {
-            return const Center(child: Text('No Events Found'));
-          }
+        builder: (context, box, _) {
+          if (box.isEmpty) return const Center(child: Text('No Events Found'));
+
           return ListView.builder(
             itemCount: box.length,
             itemBuilder: (context, index) {
               final event = box.getAt(index);
-              if (event == null) return const SizedBox.shrink(); // Prevent null errors
+              if (event == null) return const SizedBox.shrink();
 
               return ListTile(
                 title: Text(event.name),
@@ -88,7 +100,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 },
                 trailing: IconButton(
                   icon: const Icon(Icons.delete),
-                  onPressed: () => deleteEvent(index),
+                  onPressed: () => _confirmDeleteEvent(index, event.name),
                 ),
               );
             },
@@ -110,35 +122,43 @@ class _HomeScreenState extends State<HomeScreen> {
       context: context,
       builder: (_) => AlertDialog(
         title: const Text('Add Event'),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: nameController,
-                decoration: const InputDecoration(labelText: 'Event Name'),
-              ),
-              TextField(
-                controller: venueController,
-                decoration: const InputDecoration(labelText: 'Venue'),
-              ),
-            ],
-          ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(controller: nameController, decoration: const InputDecoration(labelText: 'Event Name')),
+            TextField(controller: venueController, decoration: const InputDecoration(labelText: 'Venue')),
+          ],
         ),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
           TextButton(
             onPressed: () {
-              if (nameController.text.trim().isNotEmpty &&
-                  venueController.text.trim().isNotEmpty) {
+              if (nameController.text.isNotEmpty && venueController.text.isNotEmpty) {
                 createEvent(nameController.text, venueController.text);
                 Navigator.pop(context);
               }
             },
             child: const Text('Create'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _confirmDeleteEvent(int index, String eventName) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete Event'),
+        content: Text('Are you sure you want to delete "$eventName" and all associated data?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () {
+              deleteEvent(index);
+              Navigator.pop(context);
+            },
+            child: const Text('Delete', style: TextStyle(color: Colors.red)),
           ),
         ],
       ),

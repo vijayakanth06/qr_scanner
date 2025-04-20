@@ -1,24 +1,37 @@
 import 'package:flutter/material.dart';
+import 'package:hive/hive.dart';
+import 'package:mobile_scanner/mobile_scanner.dart';
 import '../models/attendee.dart';
-import 'barcode_scanner_screen.dart';
-import '../services/excel_service.dart';
 import '../services/settings_service.dart';
 import '../utils/data_parser.dart';
-import 'package:permission_handler/permission_handler.dart';
-import 'package:hive_flutter/hive_flutter.dart';
+import '../utils/excel_export.dart';
 
 class EventScreen extends StatefulWidget {
-  final String eventName;
-
   const EventScreen({super.key, required this.eventName});
 
+  final String eventName;
+
   @override
-  State<EventScreen> createState() => _EventScreenState();
+  EventScreenState createState() => EventScreenState();
 }
 
-class _EventScreenState extends State<EventScreen> {
-  late Map<String, String> departments;
-  Box<Attendee>? attendeeBox; // Nullable to prevent access before initialization
+class EventScreenState extends State<EventScreen> {
+  Box<Attendee>? attendeeBox;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(widget.eventName),
+      ),
+      body: Center(
+        child: Text('Event Screen for ${widget.eventName}'),
+      ),
+    );
+  }
+  List<Attendee> attendees = [];
+  Map<String, String> departments = {};
+  final MobileScannerController scannerController = MobileScannerController();
 
   @override
   void initState() {
@@ -27,163 +40,69 @@ class _EventScreenState extends State<EventScreen> {
   }
 
   Future<void> _initialize() async {
+    attendeeBox = await Hive.openBox<Attendee>('attendees');
     departments = await SettingsService.loadDepartments();
-    if (!Hive.isBoxOpen('attendees')) {
-      await Hive.openBox<Attendee>('attendees'); // Ensure the box is opened
-    }
-    attendeeBox = Hive.box<Attendee>('attendees');
-    setState(() {}); // Ensure UI rebuilds after loading data
+    updateAttendeeList();
   }
 
-  void onQRCodeScanned(String qrData) {
-    if (qrData.length < 8) {
+  void updateAttendeeList() {
+    setState(() {
+      attendees = attendeeBox?.values.where((a) => a.eventName == widget.eventName).toList() ?? [];
+    });
+  }
+
+  void onQRCodeScanned(String? qrData) {
+    if (qrData == null || qrData.length < 8) {
       _showMessage('Invalid QR Code');
       return;
     }
 
-    String rollNumber = qrData;
-    String batch = extractBatch(rollNumber);
-    String department = extractDepartment(rollNumber, departments);
-    String time = getCurrentTime();
+    String id = qrData;
+    DateTime currentTime = DateTime.now();
+    String batch = extractBatch(id);
+    String department = extractDepartment(id, departments);
+    
+    // ✅ Fix: Ensure `name` is assigned (Replace "Unknown" if real name is available)
+    String name = "Unknown"; 
 
-    final newAttendee = Attendee(
-      rollNumber: rollNumber,
-      batch: batch,
-      department: department,
-      time: time,
-      eventName: widget.eventName, // ✅ Ensure event name is saved
+    Attendee? existingAttendee = attendeeBox!.values.firstWhere(
+      (a) => a.id == id && a.eventName == widget.eventName,
+      orElse: () => Attendee.empty(),
     );
 
-    attendeeBox?.add(newAttendee); // ✅ Save attendee
-    setState(() {});
-    _showMessage('Saved: Roll: $rollNumber | Batch: $batch | Dept: $department | Time: $time');
+    if (existingAttendee.id.isNotEmpty) {
+      existingAttendee.outTime = currentTime;
+      existingAttendee.save();
+      _showMessage('Exit Recorded: ID: $id | Out Time: ${getCurrentTime()}');
+    } else {
+      attendeeBox?.add(
+        Attendee(
+          id: id,
+          name: name, // ✅ Fixed missing `name` field
+          batch: batch,
+          department: department,
+          inTime: currentTime,
+          outTime: null,
+          eventName: widget.eventName,
+        ),
+      );
+      _showMessage('Entry Recorded: ID: $id | Time: ${getCurrentTime()}');
+    }
+
+    updateAttendeeList();
   }
 
-  List<Attendee> getAttendeesForEvent() {
-    if (attendeeBox == null) return [];
-    return attendeeBox!.values
-        .where((attendee) => attendee.eventName == widget.eventName) // ✅ Filter by event name
-        .toList();
-  }
-
-  Future<void> exportToExcel() async {
-    List<Attendee> attendees = getAttendeesForEvent();
+  void exportToExcel() {
     if (attendees.isEmpty) {
-      _showMessage('No data to export');
+      _showMessage('No attendees to export');
       return;
     }
-
-    if (await Permission.manageExternalStorage.request().isGranted ||
-        await Permission.storage.request().isGranted) {
-      List<Map<String, String>> data = attendees.map((attendee) => {
-            'rollNumber': attendee.rollNumber.toString(),
-            'batch': attendee.batch.toString(),
-            'department': attendee.department.toString(),
-            'time': attendee.time.toString(),
-          }).toList();
-
-      String filePath = await ExcelService.generateExcel(data, widget.eventName);
-      _showMessage('Excel file saved at: $filePath');
-    } else {
-      _showMessage('Storage permission denied');
-      openAppSettings();
-    }
+    exportAttendeesToExcel(attendees, widget.eventName);
+    _showMessage('Excel exported successfully');
   }
 
   void _showMessage(String message) {
-    final overlay = Overlay.of(context);
-    final overlayEntry = OverlayEntry(
-      builder: (context) => Positioned(
-        top: kToolbarHeight + 10,
-        left: 20,
-        right: 20,
-        child: Material(
-          color: Colors.transparent,
-          child: Container(
-            padding: EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: Colors.blueAccent,
-              borderRadius: BorderRadius.circular(8),
-              boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 4)],
-            ),
-            child: Text(
-              message,
-              style: TextStyle(color: Colors.white, fontSize: 19, fontWeight: FontWeight.bold),
-              textAlign: TextAlign.center,
-            ),
-          ),
-        ),
-      ),
-    );
-
-    overlay.insert(overlayEntry);
-
-    Future.delayed(const Duration(seconds: 3), () {
-      overlayEntry.remove();
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return FutureBuilder(
-      future: Hive.openBox<Attendee>('attendees'), // Ensure the box is open before building UI
-      builder: (context, snapshot) {
-        if (snapshot.connectionState != ConnectionState.done) {
-          return const Scaffold(body: Center(child: CircularProgressIndicator()));
-        }
-
-        return Scaffold(
-          appBar: AppBar(title: Text(widget.eventName)),
-          body: Column(
-            children: [
-              Expanded(
-                child: ValueListenableBuilder(
-                  valueListenable: Hive.box<Attendee>('attendees').listenable(),
-                  builder: (context, Box<Attendee> box, _) {
-                    List<Attendee> attendees = getAttendeesForEvent(); // ✅ Filtered attendees
-                    if (attendees.isEmpty) {
-                      return const Center(child: Text('No attendees yet.'));
-                    }
-                    return ListView.builder(
-                      itemCount: attendees.length,
-                      itemBuilder: (context, index) {
-                        final attendee = attendees[index];
-                        return ListTile(
-                          title: Text('Roll: ${attendee.rollNumber}'),
-                          subtitle: Text('Batch: ${attendee.batch} | Dept: ${attendee.department}'),
-                          trailing: Text(attendee.time),
-                        );
-                      },
-                    );
-                  },
-                ),
-              ),
-              const SizedBox(height: 16),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                children: [
-                  ElevatedButton(
-                    onPressed: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => BarcodeScannerScreen(onScanned: onQRCodeScanned),
-                        ),
-                      );
-                    },
-                    child: const Text('Scan QR'),
-                  ),
-                  ElevatedButton(
-                    onPressed: exportToExcel,
-                    child: const Text('Export Excel'),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
-            ],
-          ),
-        );
-      },
-    );
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message), duration: const Duration(seconds: 2)));
   }
 }

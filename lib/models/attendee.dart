@@ -5,25 +5,46 @@ part 'attendee.g.dart';
 @HiveType(typeId: 0)
 class Attendee extends HiveObject {
   @HiveField(0)
-  String rollNumber;
+  String id; // Unique identifier from the QR Code
 
   @HiveField(1)
-  String batch;
+  String name;
 
   @HiveField(2)
-  String department;
+  String batch; // ✅ Added missing batch field
 
   @HiveField(3)
-  String time;
+  String department;
 
-  @HiveField(4) // ✅ Add this new field
-  String eventName;
+  @HiveField(4)
+  DateTime inTime; // Entry time
+
+  @HiveField(5)
+  DateTime? outTime; // Exit time (nullable, updated when scanned again)
+
+  @HiveField(6)
+  String eventName; // Event where the attendee was added
 
   Attendee({
-    required this.rollNumber,
-    required this.batch,
+    required this.id,
+    required this.name,
+    required this.batch, // ✅ Now required
     required this.department,
-    required this.time,
-    required this.eventName, // ✅ Ensure event name is required
+    required this.inTime,
+    this.outTime,
+    required this.eventName,
   });
+
+  // ✅ Static method to return an empty Attendee object (Fix for `null` issue)
+  static Attendee empty() {
+    return Attendee(
+      id: '',
+      name: '',
+      batch: '', // ✅ Included batch here
+      department: '',
+      inTime: DateTime(2000, 1, 1), // Dummy default time
+      outTime: null,
+      eventName: '',
+    );
+  }
 }
