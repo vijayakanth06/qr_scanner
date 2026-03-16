@@ -35,6 +35,10 @@ build/
 generated/
 *.lock
 
+# Gradle local cache (should never be committed)
+.gradle-local/
+.gradle/
+
 # Android-specific
 android/.gradle/
 android/app/build/
