@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:hive/hive.dart';
 
 import '../../../analytics/data/scan_analytics_service.dart';
@@ -13,6 +14,20 @@ import '../../domain/services/scan_policy_service.dart';
 import '../../domain/utils/roll_number_parser.dart';
 import '../../../settings/data/settings_service.dart';
 import 'barcode_scanner_screen.dart';
+
+class _ScanTimelineEntry {
+  const _ScanTimelineEntry({
+    required this.type,
+    required this.message,
+    required this.timestamp,
+    this.rollNumber,
+  });
+
+  final ScanOutcomeType type;
+  final String message;
+  final DateTime timestamp;
+  final String? rollNumber;
+}
 
 class EventScreen extends StatefulWidget {
   const EventScreen({super.key, required this.event});
@@ -35,9 +50,8 @@ class _EventScreenState extends State<EventScreen> {
   List<Attendee> attendees = [];
   bool isLoading = true;
   bool isProcessingScan = false;
-  DateTime? lastScanAt;
-
-  final Map<String, DateTime> _lastExitByRoll = {};
+  final Map<String, DateTime> _lastScanByRoll = {};
+  final List<_ScanTimelineEntry> _scanTimeline = [];
 
   @override
   void initState() {
@@ -83,67 +97,141 @@ class _EventScreenState extends State<EventScreen> {
     );
   }
 
-  Future<void> _handleScannedCode(String qrData) async {
-    if (isProcessingScan || attendanceFlowService == null) return;
+  Future<ScanHandleResult> _handleScannedCode(String qrData) async {
+    if (attendanceFlowService == null) {
+      return const ScanHandleResult(
+        shouldCloseScanner: false,
+        type: ScanOutcomeType.blocked,
+        message: 'Attendance service is still loading. Please wait a moment.',
+      );
+    }
+
+    if (isProcessingScan) {
+      return const ScanHandleResult(
+        shouldCloseScanner: false,
+        type: ScanOutcomeType.info,
+        message: 'Previous scan is still processing.',
+      );
+    }
 
     final now = DateTime.now();
+    final normalized = qrData.trim().toUpperCase();
+    if (normalized.isEmpty) {
+      final result = const ScanHandleResult(
+        shouldCloseScanner: false,
+        type: ScanOutcomeType.invalid,
+        message: 'Empty QR content. Please scan a valid roll number barcode.',
+      );
+      _recordTimeline(
+        type: result.type,
+        message: result.message,
+        timestamp: now,
+      );
+      return result;
+    }
+
     final cooldownSeconds = widget.event.cooldownSeconds;
-    if (isCooldownActive(lastScanAt: lastScanAt, now: now, cooldownSeconds: cooldownSeconds)) {
-      _showMessage('Cooldown active: wait $cooldownSeconds seconds before next scan.');
-      return;
+    final lastScanForRoll = _lastScanByRoll[normalized];
+    if (isCooldownActive(lastScanAt: lastScanForRoll, now: now, cooldownSeconds: cooldownSeconds)) {
+      final elapsed = now.difference(lastScanForRoll!).inSeconds;
+      final remaining = (cooldownSeconds - elapsed).clamp(1, cooldownSeconds);
+      final result = ScanHandleResult(
+        shouldCloseScanner: false,
+        type: ScanOutcomeType.blocked,
+        message: 'Cooldown active for $normalized. Wait ${remaining}s before rescanning this roll.',
+        scannedCode: normalized,
+      );
+      _recordTimeline(
+        type: result.type,
+        message: result.message,
+        timestamp: now,
+        rollNumber: normalized,
+      );
+      return result;
     }
 
     isProcessingScan = true;
-    lastScanAt = now;
+    _lastScanByRoll[normalized] = now;
 
-    final normalized = qrData.trim().toUpperCase();
-    final student = studentRepository?.getByRollNumber(normalized);
-    final action = await _showActionDialog(normalized, student);
-    if (!mounted || action == null) {
-      isProcessingScan = false;
-      return;
-    }
-
-    if (!isActionAllowed(widget.event.scanMode, action)) {
-      _showMessage('Selected action is not allowed for this event scan mode.');
-      isProcessingScan = false;
-      return;
-    }
-
-    if (action == AttendanceAction.exit && widget.event.restrictDuplicateExit) {
-      final previousExit = _lastExitByRoll[normalized];
-      final hasOpenEntry = attendees.any((a) => a.id == normalized && a.outTime == null);
-      if (previousExit != null && !hasOpenEntry) {
-        await analyticsService.incrementDuplicateExitAttempt();
-        _showMessage('Duplicate Exit blocked for $normalized. Record Entry before next Exit.');
-        isProcessingScan = false;
-        return;
-      }
-    }
-
-    final result = await attendanceFlowService!.recordAttendance(
-      eventName: widget.event.name,
-      scannedValue: normalized,
-      action: action,
-      departments: departments,
-      studentName: student?.name,
-      timestamp: now,
-    );
-
-    if (result.success) {
-      await analyticsService.incrementSuccessfulScan();
-      if (result.code == AttendanceResultCode.successExit) {
-        _lastExitByRoll[normalized] = now;
+    try {
+      final student = studentRepository?.getByRollNumber(normalized);
+      final action = await _resolveAction(normalized, student);
+      if (!mounted) {
+        return const ScanHandleResult(
+          shouldCloseScanner: true,
+          type: ScanOutcomeType.info,
+          message: 'Scan flow closed.',
+        );
       }
 
-      final info = parseRollNumber(normalized, departments);
-      final actionLabel = action == AttendanceAction.entry ? 'Entry' : 'Exit';
-      final yearText = info.currentYear == null ? 'Year ?' : 'Year ${info.currentYear}';
-      final nameText = student?.name.isNotEmpty == true ? ' | ${student!.name}' : '';
-      _showMessage(
-        '$actionLabel recorded for ${info.normalizedRollNumber}$nameText ($yearText) at ${formatDateTimeHuman(now)}',
+      if (action == null) {
+        final result = ScanHandleResult(
+          shouldCloseScanner: false,
+          type: ScanOutcomeType.info,
+          message: 'Action cancelled for $normalized.',
+          scannedCode: normalized,
+        );
+        _recordTimeline(
+          type: result.type,
+          message: result.message,
+          timestamp: now,
+          rollNumber: normalized,
+        );
+        return result;
+      }
+
+      if (!isActionAllowed(widget.event.scanMode, action)) {
+        final result = const ScanHandleResult(
+          shouldCloseScanner: false,
+          type: ScanOutcomeType.blocked,
+          message: 'Selected action is not allowed for this event scan mode.',
+        );
+        _recordTimeline(
+          type: result.type,
+          message: result.message,
+          timestamp: now,
+          rollNumber: null,
+        );
+        return result;
+      }
+
+      final result = await attendanceFlowService!.recordAttendance(
+        eventName: widget.event.name,
+        scannedValue: normalized,
+        action: action,
+        departments: departments,
+        studentName: student?.name,
+        timestamp: now,
       );
-    } else {
+
+      if (result.success) {
+        await analyticsService.incrementSuccessfulScan();
+
+        final info = parseRollNumber(normalized, departments);
+        final actionLabel = action == AttendanceAction.entry ? 'ENTRY' : 'EXIT';
+        final nameText = student?.name.isNotEmpty == true ? student!.name : 'Unknown';
+        final uiMessage = '$actionLabel • ${info.normalizedRollNumber} • $nameText';
+
+        final outcomeType = result.code == AttendanceResultCode.successExit
+            ? ScanOutcomeType.successExit
+            : ScanOutcomeType.successEntry;
+
+        _recordTimeline(
+          type: outcomeType,
+          message: uiMessage,
+          timestamp: now,
+          rollNumber: normalized,
+        );
+        _refreshAttendees();
+
+        return ScanHandleResult(
+          shouldCloseScanner: false,
+          type: outcomeType,
+          message: uiMessage,
+          scannedCode: normalized,
+        );
+      }
+
       if (result.code == AttendanceResultCode.invalidBarcode) {
         await analyticsService.incrementInvalidScan();
       }
@@ -153,26 +241,93 @@ class _EventScreenState extends State<EventScreen> {
       if (result.code == AttendanceResultCode.noActiveEntry) {
         await analyticsService.incrementDuplicateExitAttempt();
       }
-      _showMessage('${result.message} Use format like 23ALR109.');
-    }
 
-    _refreshAttendees();
-    isProcessingScan = false;
+      final type = result.code == AttendanceResultCode.invalidBarcode
+          ? ScanOutcomeType.invalid
+          : ScanOutcomeType.blocked;
+      final uiMessage = '${result.message} Use format like 23ALR109.';
+
+      _recordTimeline(
+        type: type,
+        message: uiMessage,
+        timestamp: now,
+        rollNumber: normalized,
+      );
+      return ScanHandleResult(
+        shouldCloseScanner: false,
+        type: type,
+        message: uiMessage,
+        scannedCode: normalized,
+      );
+    } finally {
+      isProcessingScan = false;
+    }
+  }
+
+  Future<AttendanceAction?> _resolveAction(String rollNumber, Student? student) async {
+    if (widget.event.scanMode == ScanMode.entryOnly) return AttendanceAction.entry;
+    if (widget.event.scanMode == ScanMode.exitOnly) return AttendanceAction.exit;
+    return _showActionDialog(rollNumber, student);
   }
 
   Future<AttendanceAction?> _showActionDialog(String rollNumber, Student? student) {
     final allowEntry = widget.event.scanMode != ScanMode.exitOnly;
     final allowExit = widget.event.scanMode != ScanMode.entryOnly;
+    final hasActiveEntry = attendees.any((a) => a.id == rollNumber && a.outTime == null);
+    final suggestedAction = hasActiveEntry ? AttendanceAction.exit : AttendanceAction.entry;
 
-    return showDialog<AttendanceAction>(
+    return showModalBottomSheet<AttendanceAction>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Attendance Action'),
-        content: Column(
+      useSafeArea: true,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (context) => Padding(
+        padding: EdgeInsets.fromLTRB(
+          16,
+          8,
+          16,
+          16 + MediaQuery.viewInsetsOf(context).bottom,
+        ),
+        child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Scanned: $rollNumber'),
+            Text(
+              'Attendance Action',
+              style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'Scanned: $rollNumber',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 8),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    suggestedAction == AttendanceAction.entry ? Icons.login : Icons.logout,
+                    color: suggestedAction == AttendanceAction.entry
+                        ? Colors.green.shade700
+                        : Theme.of(context).colorScheme.error,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      suggestedAction == AttendanceAction.entry
+                          ? 'Suggested: Entry (no active entry record)'
+                          : 'Suggested: Exit (active entry found)',
+                    ),
+                  ),
+                ],
+              ),
+            ),
             const SizedBox(height: 10),
             Card(
               child: Padding(
@@ -193,51 +348,188 @@ class _EventScreenState extends State<EventScreen> {
                 ),
               ),
             ),
-          ],
-        ),
-        actions: [
-          Wrap(
-            spacing: 8,
-            children: [
-              ActionChip(
+            const SizedBox(height: 14),
+            Row(
+              children: [
+                Expanded(
+                  child: SizedBox(
+                    height: 56,
+                    child: FilledButton.icon(
+                      icon: const Icon(Icons.login),
+                      label: const Text('Entry'),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: Colors.green.shade600,
+                        foregroundColor: Colors.white,
+                        textStyle: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
+                      ),
+                      onPressed: allowEntry
+                          ? () {
+                              HapticFeedback.mediumImpact();
+                              Navigator.pop(context, AttendanceAction.entry);
+                            }
+                          : null,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: SizedBox(
+                    height: 56,
+                    child: FilledButton.icon(
+                      icon: const Icon(Icons.logout),
+                      label: const Text('Exit'),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: Theme.of(context).colorScheme.error,
+                        foregroundColor: Theme.of(context).colorScheme.onError,
+                        textStyle: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
+                      ),
+                      onPressed: allowExit
+                          ? () {
+                              HapticFeedback.heavyImpact();
+                              Navigator.pop(context, AttendanceAction.exit);
+                            }
+                          : null,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            SizedBox(
+              width: double.infinity,
+              height: 52,
+              child: OutlinedButton.icon(
+                icon: const Icon(Icons.close),
                 label: const Text('Cancel'),
                 onPressed: () => Navigator.pop(context),
               ),
-              ActionChip(
-                label: const Text('Entry'),
-                onPressed: allowEntry ? () => Navigator.pop(context, AttendanceAction.entry) : null,
-              ),
-              ActionChip(
-                label: const Text('Exit'),
-                onPressed: allowExit ? () => Navigator.pop(context, AttendanceAction.exit) : null,
-              ),
-            ],
-          ),
-        ],
+            ),
+          ],
+        ),
       ),
     );
   }
 
   Future<void> _exportToExcel() async {
     if (attendees.isEmpty) {
-      _showMessage('No attendees to export');
+      _recordTimeline(
+        type: ScanOutcomeType.info,
+        message: 'No attendees to export.',
+        timestamp: DateTime.now(),
+      );
       return;
     }
 
     try {
       final exportPath = await exportAttendeesToExcel(attendees, widget.event.name);
       await analyticsService.incrementExportSuccess();
-      _showMessage('Attendance exported successfully: $exportPath');
+      _recordTimeline(
+        type: ScanOutcomeType.info,
+        message: 'Attendance exported successfully: $exportPath',
+        timestamp: DateTime.now(),
+      );
     } catch (_) {
       await analyticsService.incrementExportFailure();
-      _showMessage('Export failed. Please check storage permission and try again.');
+      _recordTimeline(
+        type: ScanOutcomeType.blocked,
+        message: 'Export failed. Please check storage permission and try again.',
+        timestamp: DateTime.now(),
+      );
     }
   }
 
-  void _showMessage(String message) {
+  void _recordTimeline({
+    required ScanOutcomeType type,
+    required String message,
+    required DateTime timestamp,
+    String? rollNumber,
+  }) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message), duration: const Duration(seconds: 3)),
+    setState(() {
+      _scanTimeline.insert(
+        0,
+        _ScanTimelineEntry(
+          type: type,
+          message: message,
+          timestamp: timestamp,
+          rollNumber: rollNumber,
+        ),
+      );
+      if (_scanTimeline.length > 8) {
+        _scanTimeline.removeRange(8, _scanTimeline.length);
+      }
+    });
+  }
+
+  (Color background, Color foreground, IconData icon, String label) _timelineStyle(
+    BuildContext context,
+    ScanOutcomeType type,
+  ) {
+    final scheme = Theme.of(context).colorScheme;
+    final successScheme = ColorScheme.fromSeed(seedColor: Colors.green);
+    if (type == ScanOutcomeType.successEntry) {
+      return (successScheme.primaryContainer, successScheme.onPrimaryContainer, Icons.login, 'ENTRY');
+    }
+    if (type == ScanOutcomeType.successExit) {
+      return (scheme.errorContainer, scheme.onErrorContainer, Icons.logout, 'EXIT');
+    }
+    if (type == ScanOutcomeType.invalid) {
+      return (scheme.errorContainer, scheme.onErrorContainer, Icons.error_outline, 'INVALID');
+    }
+    if (type == ScanOutcomeType.blocked) {
+      return (scheme.secondaryContainer, scheme.onSecondaryContainer, Icons.block, 'BLOCKED');
+    }
+    return (scheme.surfaceContainerHighest, scheme.onSurfaceVariant, Icons.info_outline, 'INFO');
+  }
+
+  Widget _buildTimeline() {
+    if (_scanTimeline.isEmpty) return const SizedBox.shrink();
+
+    final items = _scanTimeline.take(3).toList();
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 10, 12, 6),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainer,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Recent scan results',
+            style: Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: 8),
+          for (var i = 0; i < items.length; i++) ...[
+            Builder(
+              builder: (context) {
+                final item = items[i];
+                final style = _timelineStyle(context, item.type);
+                return Row(
+                  children: [
+                    Icon(style.$3, color: style.$2, size: 18),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        item.message,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      '${item.timestamp.hour.toString().padLeft(2, '0')}:${item.timestamp.minute.toString().padLeft(2, '0')}:${item.timestamp.second.toString().padLeft(2, '0')}',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ],
+                );
+              },
+            ),
+            if (i < items.length - 1) const SizedBox(height: 6),
+          ],
+        ],
+      ),
     );
   }
 
@@ -256,28 +548,35 @@ class _EventScreenState extends State<EventScreen> {
       ),
       body: isLoading
           ? const Center(child: CircularProgressIndicator())
-          : attendees.isEmpty
-              ? const Center(child: Text('No attendance yet. Tap camera to scan.'))
-              : ListView.separated(
-                  itemCount: attendees.length,
-                  separatorBuilder: (_, __) => const Divider(height: 1),
-                  itemBuilder: (context, index) {
-                    final attendee = attendees[index];
-                    final year = calculateStudentYearFromBatch(attendee.batch);
-                    final rollSuffix = extractRollSuffix(attendee.id);
+          : Column(
+              children: [
+                _buildTimeline(),
+                Expanded(
+                  child: attendees.isEmpty
+                      ? const Center(child: Text('No attendance yet. Tap camera to scan.'))
+                      : ListView.separated(
+                          itemCount: attendees.length,
+                          separatorBuilder: (_, __) => const Divider(height: 1),
+                          itemBuilder: (context, index) {
+                            final attendee = attendees[index];
+                            final year = calculateStudentYearFromBatch(attendee.batch);
+                            final rollSuffix = extractRollSuffix(attendee.id);
 
-                    return ListTile(
-                      leading: const Icon(Icons.badge_outlined),
-                      title: Text(attendee.id),
-                      subtitle: Text(
-                        '${attendee.name.isNotEmpty ? attendee.name : 'Unknown'} | ${attendee.department} | Batch ${attendee.batch} | ${year == null ? 'Year ?' : 'Year $year'} | Roll $rollSuffix\n'
-                        'In: ${formatDateTimeHuman(attendee.inTime)}\n'
-                        'Out: ${attendee.outTime == null ? 'Pending' : formatDateTimeHuman(attendee.outTime!)}',
-                      ),
-                      isThreeLine: true,
-                    );
-                  },
+                            return ListTile(
+                              leading: const Icon(Icons.badge_outlined),
+                              title: Text(attendee.id),
+                              subtitle: Text(
+                                '${attendee.name.isNotEmpty ? attendee.name : 'Unknown'} | ${attendee.department} | Batch ${attendee.batch} | ${year == null ? 'Year ?' : 'Year $year'} | Roll $rollSuffix\n'
+                                'In: ${formatDateTimeHuman(attendee.inTime)}\n'
+                                'Out: ${attendee.outTime == null ? 'Pending' : formatDateTimeHuman(attendee.outTime!)}',
+                              ),
+                              isThreeLine: true,
+                            );
+                          },
+                        ),
                 ),
+              ],
+            ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _openScanner,
         icon: const Icon(Icons.camera_alt_outlined),

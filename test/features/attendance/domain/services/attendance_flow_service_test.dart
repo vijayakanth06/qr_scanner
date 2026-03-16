@@ -85,6 +85,62 @@ void main() {
       expect(store.all().first.outTime, DateTime(2026, 3, 14, 10, 0, 0));
     });
 
+    test('allows re-entry after a completed exit', () async {
+      final store = InMemoryAttendeeStore();
+      final service = AttendanceFlowService(store: store);
+
+      await service.recordAttendance(
+        eventName: 'Tech Fest',
+        scannedValue: '23ALR109',
+        action: AttendanceAction.entry,
+        departments: {'ALR': 'AIML'},
+        timestamp: DateTime(2026, 3, 14, 9, 0, 0),
+      );
+      await service.recordAttendance(
+        eventName: 'Tech Fest',
+        scannedValue: '23ALR109',
+        action: AttendanceAction.exit,
+        departments: {'ALR': 'AIML'},
+        timestamp: DateTime(2026, 3, 14, 10, 0, 0),
+      );
+
+      final reEntry = await service.recordAttendance(
+        eventName: 'Tech Fest',
+        scannedValue: '23ALR109',
+        action: AttendanceAction.entry,
+        departments: {'ALR': 'AIML'},
+        timestamp: DateTime(2026, 3, 14, 11, 0, 0),
+      );
+
+      expect(reEntry.success, isTrue);
+      expect(store.all().length, 2);
+      final latest = store.all().last;
+      expect(latest.inTime, DateTime(2026, 3, 14, 11, 0, 0));
+      expect(latest.outTime, isNull);
+    });
+
+    test('treats active records independently across events', () async {
+      final store = InMemoryAttendeeStore();
+      final service = AttendanceFlowService(store: store);
+
+      await service.recordAttendance(
+        eventName: 'Tech Fest',
+        scannedValue: '23ALR109',
+        action: AttendanceAction.entry,
+        departments: {'ALR': 'AIML'},
+      );
+
+      final otherEventEntry = await service.recordAttendance(
+        eventName: 'Workshop',
+        scannedValue: '23ALR109',
+        action: AttendanceAction.entry,
+        departments: {'ALR': 'AIML'},
+      );
+
+      expect(otherEventEntry.success, isTrue);
+      expect(store.all().length, 2);
+    });
+
     test('rejects exit when no active entry exists', () async {
       final store = InMemoryAttendeeStore();
       final service = AttendanceFlowService(store: store);
