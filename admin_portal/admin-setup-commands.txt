@@ -1,0 +1,20 @@
+1) Set project id in .firebaserc
+   - Replace "your-firebase-project-id" in .firebaserc with your actual project id.
+
+2) Login and select project
+   firebase login
+   firebase use <your-firebase-project-id>
+
+3) Deploy Hosting + Realtime Database rules
+   firebase deploy --only hosting,database
+
+4) Install admin SDK tool dependency for claim script
+   npm install firebase-admin
+
+5) Set admin claim for an existing Firebase Auth user email
+   node scripts/setAdminClaim.mjs "C:/path/to/serviceAccountKey.json" "admin@yourcollege.edu"
+
+6) Verify admin claim in Firebase Auth by re-signing in to portal and confirming access.
+
+7) Remove admin claim (if needed)
+   node -e "import('firebase-admin').then(async (admin)=>{const sa=require('C:/path/to/serviceAccountKey.json');admin.default.initializeApp({credential:admin.default.credential.cert(sa)});const u=await admin.default.auth().getUserByEmail('admin@yourcollege.edu');await admin.default.auth().setCustomUserClaims(u.uid,{admin:false});console.log('removed');process.exit(0);})"

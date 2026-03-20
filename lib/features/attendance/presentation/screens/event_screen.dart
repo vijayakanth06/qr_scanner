@@ -4,6 +4,7 @@ import 'package:hive/hive.dart';
 
 import '../../../analytics/data/scan_analytics_service.dart';
 import '../../../events/domain/entities/event.dart';
+import '../../../students/data/firebase_student_repository.dart';
 import '../../../students/data/hive_student_repository.dart';
 import '../../../students/domain/entities/student.dart';
 import '../../data/excel_export.dart';
@@ -43,6 +44,7 @@ class _EventScreenState extends State<EventScreen> {
   Box<Student>? studentBox;
   AttendanceFlowService? attendanceFlowService;
   HiveStudentRepository? studentRepository;
+  FirebaseStudentRepository? firebaseStudentRepository;
   final settingsRepository = SettingsService();
   final analyticsService = ScanAnalyticsService();
 
@@ -51,6 +53,7 @@ class _EventScreenState extends State<EventScreen> {
   bool isLoading = true;
   bool isProcessingScan = false;
   final Map<String, DateTime> _lastScanByRoll = {};
+  final Map<String, Student> _studentMemoryCache = {};
   final List<_ScanTimelineEntry> _scanTimeline = [];
 
   @override
@@ -66,6 +69,7 @@ class _EventScreenState extends State<EventScreen> {
       store: HiveAttendeeStore(attendeeBox!),
     );
     studentRepository = HiveStudentRepository(studentBox!);
+    firebaseStudentRepository = FirebaseStudentRepository();
     departments = await settingsRepository.loadDepartments();
     _refreshAttendees();
     if (!mounted) return;
@@ -154,7 +158,7 @@ class _EventScreenState extends State<EventScreen> {
     _lastScanByRoll[normalized] = now;
 
     try {
-      final student = studentRepository?.getByRollNumber(normalized);
+      final student = await _resolveStudentProfile(normalized);
       final action = await _resolveAction(normalized, student);
       if (!mounted) {
         return const ScanHandleResult(
@@ -262,6 +266,31 @@ class _EventScreenState extends State<EventScreen> {
     } finally {
       isProcessingScan = false;
     }
+  }
+
+  Future<Student?> _resolveStudentProfile(String rollNumber) async {
+    final normalized = rollNumber.trim().toUpperCase();
+    if (normalized.isEmpty) return null;
+
+    final memoryHit = _studentMemoryCache[normalized];
+    if (memoryHit != null) {
+      return memoryHit;
+    }
+
+    final localHit = studentRepository?.getByRollNumber(normalized);
+    if (localHit != null) {
+      _studentMemoryCache[normalized] = localHit;
+      return localHit;
+    }
+
+    final remoteHit = await firebaseStudentRepository?.getByRollNumber(normalized);
+    if (remoteHit != null) {
+      _studentMemoryCache[normalized] = remoteHit;
+      await studentRepository?.upsertAll([remoteHit]);
+      return remoteHit;
+    }
+
+    return null;
   }
 
   Future<AttendanceAction?> _resolveAction(String rollNumber, Student? student) async {

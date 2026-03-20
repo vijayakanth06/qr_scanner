@@ -91,3 +91,9 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# React admin portal
+admin_portal/node_modules/
+admin_portal/dist/
+admin_portal/.env
+admin_portal/.env.*
