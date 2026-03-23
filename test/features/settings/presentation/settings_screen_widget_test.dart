@@ -29,5 +29,6 @@ void main() {
 
     expect(find.text('Scan Analytics'), findsNothing);
     expect(find.text('Import CSV/Excel'), findsNothing);
+    expect(find.text('Import Students CSV/Excel'), findsNothing);
   });
 }
