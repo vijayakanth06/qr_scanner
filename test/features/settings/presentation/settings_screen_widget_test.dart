@@ -40,7 +40,8 @@ void main() {
 
     await tester.pumpAndSettle();
 
-    expect(find.text('Department Settings'), findsOneWidget);
+    // UI copy changed from "Department Settings" to "Departments".
+    expect(find.text('Departments'), findsOneWidget);
     expect(find.text('Scan Analytics'), findsOneWidget);
     expect(find.text('Import Students CSV/Excel'), findsOneWidget);
   });
