@@ -1,0 +1,17 @@
+flowchart TD
+    A[Start Scan] --> B{QR Data Valid?}
+    B -- No --> C[Return Invalid Result]
+    B -- Yes --> D{Cooldown Active?}
+    D -- Yes --> E[Return Blocked Result]
+    D -- No --> F[Resolve Student Profile]
+    F --> G{Scan Mode}
+    G -->|Entry Only| H[Set Action Entry]
+    G -->|Exit Only| I[Set Action Exit]
+    G -->|Both| J[Prompt Action Entry or Exit]
+    H --> K[Record Attendance]
+    I --> K
+    J --> K
+    K --> L{Record Success?}
+    L -- No --> M[Return Blocked/Invalid Message]
+    L -- Yes --> N[Update Analytics]
+    N --> O[Return Success Result]

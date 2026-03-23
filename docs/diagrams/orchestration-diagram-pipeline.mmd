@@ -1,0 +1,19 @@
+flowchart LR
+    A[Admin Portal Edit] --> B[Build Batch Updates]
+    B --> C[Write studentsByRoll]
+    B --> D[Write hierarchy index]
+    B --> E[Write audit/studentMutations append-only]
+    C --> F[Firebase RTDB]
+    D --> F
+    E --> F
+
+    G[Mobile Scan] --> H[EventScreen Scan Flow]
+    H --> I[AttendanceFlowService]
+    I --> J[Hive attendees]
+    H --> K[FirebaseStudentRepository with retry/backoff]
+    K --> F
+    H --> L[Scan outcome to UI]
+
+    M[Bootstrap] --> N[Firebase init]
+    M --> O[Crashlytics handlers]
+    M --> P[DI container setup]

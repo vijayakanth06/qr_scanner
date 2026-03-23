@@ -25,6 +25,9 @@ class Attendee extends HiveObject {
   @HiveField(6)
   String eventName;
 
+  @HiveField(7)
+  String? yearOfStudy;
+
   Attendee({
     required this.id,
     required this.name,
@@ -33,5 +36,6 @@ class Attendee extends HiveObject {
     required this.inTime,
     this.outTime,
     required this.eventName,
+    this.yearOfStudy,
   });
 }

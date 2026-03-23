@@ -24,13 +24,14 @@ class AttendeeAdapter extends TypeAdapter<Attendee> {
       inTime: fields[4] as DateTime,
       outTime: fields[5] as DateTime?,
       eventName: fields[6] as String,
+      yearOfStudy: fields[7] as String?,
     );
   }
 
   @override
   void write(BinaryWriter writer, Attendee obj) {
     writer
-      ..writeByte(7)
+      ..writeByte(8)
       ..writeByte(0)
       ..write(obj.id)
       ..writeByte(1)
@@ -44,7 +45,9 @@ class AttendeeAdapter extends TypeAdapter<Attendee> {
       ..writeByte(5)
       ..write(obj.outTime)
       ..writeByte(6)
-      ..write(obj.eventName);
+      ..write(obj.eventName)
+      ..writeByte(7)
+      ..write(obj.yearOfStudy);
   }
 
   @override

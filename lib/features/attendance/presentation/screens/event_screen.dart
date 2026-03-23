@@ -2,12 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:hive/hive.dart';
 
-import '../../../analytics/data/scan_analytics_service.dart';
+import '../../application/export_attendees_usecase.dart';
 import '../../../events/domain/entities/event.dart';
 import '../../../students/data/firebase_student_repository.dart';
-import '../../../students/data/hive_student_repository.dart';
 import '../../../students/domain/entities/student.dart';
-import '../../data/excel_export.dart';
 import '../../data/hive_attendee_store.dart';
 import '../../domain/entities/attendee.dart';
 import '../../domain/services/attendance_flow_service.dart';
@@ -41,17 +39,19 @@ class EventScreen extends StatefulWidget {
 
 class _EventScreenState extends State<EventScreen> {
   Box<Attendee>? attendeeBox;
-  Box<Student>? studentBox;
   AttendanceFlowService? attendanceFlowService;
-  HiveStudentRepository? studentRepository;
   FirebaseStudentRepository? firebaseStudentRepository;
   final settingsRepository = SettingsService();
-  final analyticsService = ScanAnalyticsService();
+  late final ExportAttendeesUseCase _exportAttendeesUseCase = ExportAttendeesUseCase();
 
   Map<String, String> departments = {};
   List<Attendee> attendees = [];
   bool isLoading = true;
   bool isProcessingScan = false;
+  String fileLocation = '';
+  final List<String> allAvailableColumns = ['ID', 'Name', 'Department', 'In Time', 'Out Time', 'Roll Number', 'Status'];
+  List<String> selectedColumns = ['ID', 'Name', 'Department', 'In Time', 'Out Time'];
+
   final Map<String, DateTime> _lastScanByRoll = {};
   final Map<String, Student> _studentMemoryCache = {};
   final List<_ScanTimelineEntry> _scanTimeline = [];
@@ -63,14 +63,17 @@ class _EventScreenState extends State<EventScreen> {
   }
 
   Future<void> _initialize() async {
-    attendeeBox = await Hive.openBox<Attendee>('attendees');
-    studentBox = await Hive.openBox<Student>('students');
+    if (Hive.isBoxOpen('attendees')) {
+      attendeeBox = Hive.box<Attendee>('attendees');
+    } else {
+      attendeeBox = await Hive.openBox<Attendee>('attendees');
+    }
     attendanceFlowService = AttendanceFlowService(
       store: HiveAttendeeStore(attendeeBox!),
     );
-    studentRepository = HiveStudentRepository(studentBox!);
     firebaseStudentRepository = FirebaseStudentRepository();
     departments = await settingsRepository.loadDepartments();
+    fileLocation = await settingsRepository.loadFileLocation();
     _refreshAttendees();
     if (!mounted) return;
     setState(() {
@@ -205,12 +208,11 @@ class _EventScreenState extends State<EventScreen> {
         action: action,
         departments: departments,
         studentName: student?.name,
+        studentYearOfStudy: student?.yearOfStudy,
         timestamp: now,
       );
 
       if (result.success) {
-        await analyticsService.incrementSuccessfulScan();
-
         final info = parseRollNumber(normalized, departments);
         final actionLabel = action == AttendanceAction.entry ? 'ENTRY' : 'EXIT';
         final nameText = student?.name.isNotEmpty == true ? student!.name : 'Unknown';
@@ -237,13 +239,28 @@ class _EventScreenState extends State<EventScreen> {
       }
 
       if (result.code == AttendanceResultCode.invalidBarcode) {
-        await analyticsService.incrementInvalidScan();
+        _recordTimeline(
+          type: ScanOutcomeType.blocked,
+          message: 'Invalid barcode format.',
+          timestamp: now,
+          rollNumber: normalized,
+        );
       }
       if (result.code == AttendanceResultCode.duplicateEntry) {
-        await analyticsService.incrementDuplicateEntryAttempt();
+        _recordTimeline(
+          type: ScanOutcomeType.blocked,
+          message: 'Duplicate entry attempt.',
+          timestamp: now,
+          rollNumber: normalized,
+        );
       }
       if (result.code == AttendanceResultCode.noActiveEntry) {
-        await analyticsService.incrementDuplicateExitAttempt();
+        _recordTimeline(
+          type: ScanOutcomeType.blocked,
+          message: 'No active entry to exit.',
+          timestamp: now,
+          rollNumber: normalized,
+        );
       }
 
       final type = result.code == AttendanceResultCode.invalidBarcode
@@ -277,16 +294,9 @@ class _EventScreenState extends State<EventScreen> {
       return memoryHit;
     }
 
-    final localHit = studentRepository?.getByRollNumber(normalized);
-    if (localHit != null) {
-      _studentMemoryCache[normalized] = localHit;
-      return localHit;
-    }
-
     final remoteHit = await firebaseStudentRepository?.getByRollNumber(normalized);
     if (remoteHit != null) {
       _studentMemoryCache[normalized] = remoteHit;
-      await studentRepository?.upsertAll([remoteHit]);
       return remoteHit;
     }
 
@@ -449,22 +459,82 @@ class _EventScreenState extends State<EventScreen> {
       return;
     }
 
+    // Show column selection dialog
+    await _showColumnSelectionDialog();
+
     try {
-      final exportPath = await exportAttendeesToExcel(attendees, widget.event.name);
-      await analyticsService.incrementExportSuccess();
+      final exportPath = await _exportAttendeesUseCase(
+        attendees: attendees,
+        event: widget.event,
+        fileLocation: fileLocation,
+        selectedColumns: selectedColumns,
+      );
       _recordTimeline(
         type: ScanOutcomeType.info,
         message: 'Attendance exported successfully: $exportPath',
         timestamp: DateTime.now(),
       );
-    } catch (_) {
-      await analyticsService.incrementExportFailure();
+    } catch (error, stackTrace) {
+      debugPrint('Attendance export failed: $error');
+      debugPrintStack(stackTrace: stackTrace);
+      final detail = error is PlatformException
+          ? '${error.code}${error.message == null ? '' : ': ${error.message}'}'
+          : error.toString();
       _recordTimeline(
         type: ScanOutcomeType.blocked,
-        message: 'Export failed. Please check storage permission and try again.',
+        message: 'Export failed: $detail',
         timestamp: DateTime.now(),
       );
     }
+  }
+
+  Future<void> _showColumnSelectionDialog() async {
+    await showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return StatefulBuilder(
+          builder: (context, setState) {
+            return AlertDialog(
+              title: const Text('Select Columns to Export'),
+              content: SizedBox(
+                width: double.maxFinite,
+                child: ListView(
+                  children: allAvailableColumns.map((column) {
+                    return CheckboxListTile(
+                      title: Text(column),
+                      value: selectedColumns.contains(column),
+                      onChanged: (bool? checked) {
+                        setState(() {
+                          if (checked == true) {
+                            if (!selectedColumns.contains(column)) {
+                              selectedColumns.add(column);
+                            }
+                          } else {
+                            selectedColumns.remove(column);
+                          }
+                        });
+                      },
+                    );
+                  }).toList(),
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Cancel'),
+                ),
+                FilledButton(
+                  onPressed: selectedColumns.isEmpty
+                      ? null
+                      : () => Navigator.pop(context),
+                  child: const Text('Export'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
   }
 
   void _recordTimeline({
@@ -588,14 +658,15 @@ class _EventScreenState extends State<EventScreen> {
                           separatorBuilder: (_, __) => const Divider(height: 1),
                           itemBuilder: (context, index) {
                             final attendee = attendees[index];
-                            final year = calculateStudentYearFromBatch(attendee.batch);
-                            final rollSuffix = extractRollSuffix(attendee.id);
+                            final yearText = attendee.yearOfStudy?.isNotEmpty == true
+                                ? 'Year ${attendee.yearOfStudy}'
+                                : 'Year ?';
 
                             return ListTile(
                               leading: const Icon(Icons.badge_outlined),
                               title: Text(attendee.id),
                               subtitle: Text(
-                                '${attendee.name.isNotEmpty ? attendee.name : 'Unknown'} | ${attendee.department} | Batch ${attendee.batch} | ${year == null ? 'Year ?' : 'Year $year'} | Roll $rollSuffix\n'
+                                '${attendee.name.isNotEmpty ? attendee.name : 'Unknown'} | ${attendee.department} | Batch ${attendee.batch} | $yearText\n'
                                 'In: ${formatDateTimeHuman(attendee.inTime)}\n'
                                 'Out: ${attendee.outTime == null ? 'Pending' : formatDateTimeHuman(attendee.outTime!)}',
                               ),

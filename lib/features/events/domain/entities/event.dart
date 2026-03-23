@@ -2,9 +2,13 @@ import 'package:hive/hive.dart';
 
 part 'event.g.dart';
 
+@HiveType(typeId: 3)
 enum ScanMode {
+  @HiveField(0)
   both,
+  @HiveField(1)
   entryOnly,
+  @HiveField(2)
   exitOnly,
 }
 

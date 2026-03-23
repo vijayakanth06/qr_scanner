@@ -82,6 +82,53 @@ function parseRowsFromJson(rows, fallback) {
     .filter((row) => row.rollNo);
 }
 
+function toPersistedStudentShape(student) {
+  return {
+    rollNo: sanitizeRollNo(student.rollNo),
+    name: String(student.name ?? '').trim(),
+    studentMobileNo: String(student.studentMobileNo ?? '').trim(),
+    branch: String(student.branch ?? '').trim().toUpperCase(),
+    yearOfStudy: normalizeYear(student.yearOfStudy ?? ''),
+    section: String(student.section ?? '').trim().toUpperCase(),
+    gender: String(student.gender ?? '').trim().toUpperCase(),
+    hostellerDayScholar: String(student.hostellerDayScholar ?? '').trim().toUpperCase(),
+    parentMobileNo: String(student.parentMobileNo ?? '').trim(),
+    updatedAt: student.updatedAt ?? Date.now(),
+    updatedBy: String(student.updatedBy ?? auth.currentUser?.email ?? 'unknown'),
+  };
+}
+
+function didStudentChange(before, after) {
+  if (!before) return true;
+  const keys = [
+    'rollNo',
+    'name',
+    'studentMobileNo',
+    'branch',
+    'yearOfStudy',
+    'section',
+    'gender',
+    'hostellerDayScholar',
+    'parentMobileNo',
+  ];
+
+  return keys.some((key) => String(before[key] ?? '') !== String(after[key] ?? ''));
+}
+
+function makeAuditEntry({ action, rollNo, before, after, sourceRoll, sourcePath }) {
+  return {
+    action,
+    rollNo,
+    actorUid: auth.currentUser?.uid ?? 'unknown',
+    actorEmail: auth.currentUser?.email ?? 'unknown',
+    timestamp: Date.now(),
+    before: before ?? null,
+    after: after ?? null,
+    sourceRoll: sourceRoll ?? null,
+    sourcePath: sourcePath ?? 'admin_portal',
+  };
+}
+
 function LoginPane({ onLogin, loading, error }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -452,12 +499,29 @@ function App() {
       const updates = {};
       const now = Date.now();
       const loadedPath = selected;
+      let auditCounter = 0;
+
+      const pushAudit = (entry) => {
+        auditCounter += 1;
+        const auditId = `${now}_${auditCounter}_${entry.action}_${entry.rollNo}`;
+        updates[`audit/studentMutations/${auditId}`] = entry;
+      };
 
       for (const oldRoll of deletedRolls) {
         const old = originalRowsByRoll[oldRoll];
         if (!old) continue;
+        const before = toPersistedStudentShape(old);
         updates[`studentsByRoll/${oldRoll}`] = null;
         updates[`hierarchy/${old.branch}/${old.yearOfStudy}/${old.section}/${oldRoll}`] = null;
+        pushAudit(
+          makeAuditEntry({
+            action: 'delete',
+            rollNo: oldRoll,
+            before,
+            after: null,
+            sourceRoll: oldRoll,
+          }),
+        );
       }
 
       for (const row of rows) {
@@ -476,8 +540,10 @@ function App() {
         normalized.rollNo = rollNo;
         normalized.updatedAt = now;
         normalized.updatedBy = auth.currentUser?.email ?? 'unknown';
+        const persistedNormalized = toPersistedStudentShape(normalized);
 
         const original = originalRowsByRoll[sourceRoll] || originalRowsByRoll[rollNo];
+        const persistedOriginal = original ? toPersistedStudentShape(original) : null;
         if (sourceRoll && sourceRoll !== rollNo && original) {
           updates[`studentsByRoll/${sourceRoll}`] = null;
           updates[
@@ -496,19 +562,33 @@ function App() {
         }
 
         updates[`studentsByRoll/${rollNo}`] = {
-          rollNo: normalized.rollNo,
-          name: normalized.name,
-          studentMobileNo: normalized.studentMobileNo,
-          branch: normalized.branch,
-          yearOfStudy: normalized.yearOfStudy,
-          section: normalized.section,
-          gender: normalized.gender,
-          hostellerDayScholar: normalized.hostellerDayScholar,
-          parentMobileNo: normalized.parentMobileNo,
-          updatedAt: normalized.updatedAt,
-          updatedBy: normalized.updatedBy,
+          rollNo: persistedNormalized.rollNo,
+          name: persistedNormalized.name,
+          studentMobileNo: persistedNormalized.studentMobileNo,
+          branch: persistedNormalized.branch,
+          yearOfStudy: persistedNormalized.yearOfStudy,
+          section: persistedNormalized.section,
+          gender: persistedNormalized.gender,
+          hostellerDayScholar: persistedNormalized.hostellerDayScholar,
+          parentMobileNo: persistedNormalized.parentMobileNo,
+          updatedAt: persistedNormalized.updatedAt,
+          updatedBy: persistedNormalized.updatedBy,
         };
         updates[`hierarchy/${normalized.branch}/${normalized.yearOfStudy}/${normalized.section}/${rollNo}`] = true;
+
+        const changed = didStudentChange(persistedOriginal, persistedNormalized);
+        if (changed) {
+          const action = persistedOriginal ? 'update' : 'create';
+          pushAudit(
+            makeAuditEntry({
+              action,
+              rollNo,
+              before: persistedOriginal,
+              after: persistedNormalized,
+              sourceRoll,
+            }),
+          );
+        }
       }
 
       await update(ref(db), updates);

@@ -42,6 +42,7 @@ class AttendanceFlowService {
     required AttendanceAction action,
     required Map<String, String> departments,
     String? studentName,
+    String? studentYearOfStudy,
     DateTime? timestamp,
   }) async {
     final now = timestamp ?? DateTime.now();
@@ -84,6 +85,7 @@ class AttendanceFlowService {
         inTime: now,
         outTime: null,
         eventName: eventName,
+        yearOfStudy: studentYearOfStudy,
       );
 
       await store.add(attendee);

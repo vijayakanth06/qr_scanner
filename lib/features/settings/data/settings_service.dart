@@ -39,4 +39,14 @@ class SettingsService implements SettingsRepository {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('departments', jsonEncode(departments));
   }
+
+  Future<String> loadFileLocation() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString('exportFileLocation') ?? '/storage/emulated/0/Download';
+  }
+
+  Future<void> saveFileLocation(String location) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('exportFileLocation', location);
+  }
 }

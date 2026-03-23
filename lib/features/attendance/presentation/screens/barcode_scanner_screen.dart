@@ -60,7 +60,9 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
       ScanHandleResult result;
       try {
         result = await widget.onScanned(code);
-      } catch (_) {
+      } catch (error, stackTrace) {
+        debugPrint('Scan processing failed: $error');
+        debugPrintStack(stackTrace: stackTrace);
         result = ScanHandleResult(
           shouldCloseScanner: false,
           type: ScanOutcomeType.blocked,
@@ -125,7 +127,10 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
           await Vibration.vibrate(duration: 30, amplitude: 140);
         }
       }
-    } catch (_) {}
+    } catch (error, stackTrace) {
+      debugPrint('Vibration plugin failed: $error');
+      debugPrintStack(stackTrace: stackTrace);
+    }
 
     if (didUseVibratorPlugin) {
       return;
@@ -142,7 +147,8 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
         return;
       }
       await HapticFeedback.selectionClick();
-    } catch (_) {
+    } catch (error) {
+      debugPrint('Haptic fallback failed: $error');
       await SystemSound.play(SystemSoundType.click);
     }
   }

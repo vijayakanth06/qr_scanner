@@ -22,6 +22,9 @@ class Student extends HiveObject {
   @HiveField(5)
   String residence;
 
+  @HiveField(6)
+  String? yearOfStudy;
+
   Student({
     required this.rollNumber,
     required this.name,
@@ -29,5 +32,6 @@ class Student extends HiveObject {
     required this.branch,
     required this.section,
     required this.residence,
+    this.yearOfStudy,
   });
 }

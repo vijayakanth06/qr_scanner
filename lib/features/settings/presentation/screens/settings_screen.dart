@@ -1,11 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
-import 'package:hive/hive.dart';
+import 'dart:io';
 
-import '../../../analytics/data/scan_analytics_service.dart';
-import '../../../students/data/hive_student_repository.dart';
-import '../../../students/data/student_import_service.dart';
-import '../../../students/domain/entities/student.dart';
 import '../../data/settings_service.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -17,26 +14,33 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   final settingsRepository = SettingsService();
-  final studentImportService = StudentImportService();
-  final analyticsService = ScanAnalyticsService();
+  static const MethodChannel _exportChannel = MethodChannel('qr_scanner/export');
 
   Map<String, String> departments = {};
-  int studentCount = 0;
-  ScanAnalytics analytics = const ScanAnalytics(
-    successfulScans: 0,
-    invalidScans: 0,
-    duplicateEntryAttempts: 0,
-    duplicateExitAttempts: 0,
-    exportSuccess: 0,
-    exportFailure: 0,
-  );
+  String exportFileLocation = '/storage/emulated/0/Download';
+
+  String _locationLabel(String value) {
+    if (value.startsWith('content://')) {
+      final decoded = Uri.decodeComponent(value);
+      final marker = 'primary:';
+      final markerIndex = decoded.lastIndexOf(marker);
+      if (markerIndex >= 0) {
+        final folder = decoded.substring(markerIndex + marker.length);
+        if (folder.trim().isNotEmpty) return folder;
+      }
+      return 'Selected folder';
+    }
+
+    final normalized = value.trim();
+    if (normalized.isEmpty) return 'Downloads';
+    return normalized.split('/').last.isNotEmpty ? normalized.split('/').last : 'Downloads';
+  }
 
   @override
   void initState() {
     super.initState();
     loadDepartments();
-    _loadStudentCount();
-    _loadAnalytics();
+    _loadFileLocation();
   }
 
   Future<void> loadDepartments() async {
@@ -45,20 +49,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
     setState(() {});
   }
 
-  Future<void> _loadStudentCount() async {
-    final box = await Hive.openBox<Student>('students');
-    final repo = HiveStudentRepository(box);
+  Future<void> _loadFileLocation() async {
+    final location = await settingsRepository.loadFileLocation();
     if (!mounted) return;
     setState(() {
-      studentCount = repo.count();
-    });
-  }
-
-  Future<void> _loadAnalytics() async {
-    final data = await analyticsService.load();
-    if (!mounted) return;
-    setState(() {
-      analytics = data;
+      exportFileLocation = location;
     });
   }
 
@@ -72,44 +67,25 @@ class _SettingsScreenState extends State<SettingsScreen> {
     settingsRepository.saveDepartments(departments);
   }
 
-  Future<void> importStudents() async {
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: ['csv', 'xlsx'],
-      withData: true,
-    );
-    if (result == null || result.files.isEmpty) return;
+  Future<void> _changeFileLocation() async {
+    String? result;
 
-    final file = result.files.single;
-    final ext = (file.extension ?? '').toLowerCase();
-
-    final box = await Hive.openBox<Student>('students');
-    final repo = HiveStudentRepository(box);
-
-    try {
-      var parsed = <Student>[];
-      if (ext == 'csv') {
-        final content = String.fromCharCodes(file.bytes ?? <int>[]);
-        parsed = studentImportService.parseCsv(content);
-      } else if (ext == 'xlsx') {
-        if (file.bytes == null) {
-          _showMessage('Invalid Excel file content.');
-          return;
-        }
-        parsed = studentImportService.parseExcel(file.bytes!);
-      }
-
-      if (parsed.isEmpty) {
-        _showMessage('No valid students found. Ensure roll number column exists.');
+    if (Platform.isAndroid) {
+      try {
+        result = await _exportChannel.invokeMethod<String>('pickExportFolder');
+      } on PlatformException catch (error) {
+        _showMessage('Folder selection failed: ${error.message ?? error.code}');
         return;
       }
-
-      await repo.upsertAll(parsed);
-      await _loadStudentCount();
-      _showMessage('Imported ${parsed.length} students successfully.');
-    } catch (_) {
-      _showMessage('Student import failed. Please verify file headers and format.');
+    } else {
+      result = await FilePicker.platform.getDirectoryPath();
     }
+
+    if (result == null || result.trim().isEmpty) return;
+
+    setState(() => exportFileLocation = result!);
+    await settingsRepository.saveFileLocation(result);
+    _showMessage('Export location updated.');
   }
 
   void _showMessage(String message) {
@@ -120,32 +96,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Department Settings')),
+      appBar: AppBar(title: const Text('Settings')),
       body: Column(
         children: [
-          Card(
-            margin: const EdgeInsets.all(12),
-            child: Padding(
-              padding: const EdgeInsets.all(12),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('Students in offline DB: $studentCount'),
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 8,
-                    children: [
-                      FilledButton.icon(
-                        onPressed: importStudents,
-                        icon: const Icon(Icons.upload_file),
-                        label: const Text('Import Students CSV/Excel'),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ),
+          // Export File Location Section
           Card(
             margin: const EdgeInsets.symmetric(horizontal: 12),
             child: Padding(
@@ -153,18 +107,31 @@ class _SettingsScreenState extends State<SettingsScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('Scan Analytics', style: TextStyle(fontWeight: FontWeight.bold)),
-                  Text('Successful scans: ${analytics.successfulScans}'),
-                  Text('Invalid scans: ${analytics.invalidScans}'),
-                  Text('Duplicate entry attempts: ${analytics.duplicateEntryAttempts}'),
-                  Text('Duplicate exit attempts: ${analytics.duplicateExitAttempts}'),
-                  Text('Export success: ${analytics.exportSuccess}'),
-                  Text('Export failure: ${analytics.exportFailure}'),
+                  const Text('Export Settings', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                  const SizedBox(height: 8),
+                  Text('Save location: ${_locationLabel(exportFileLocation)}',
+                    style: const TextStyle(fontSize: 12),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 8),
+                  FilledButton.icon(
+                    onPressed: _changeFileLocation,
+                    icon: const Icon(Icons.folder),
+                    label: const Text('Change Save Location'),
+                  ),
                 ],
               ),
             ),
           ),
           const SizedBox(height: 8),
+          // Departments Section
+          const Padding(
+            padding: EdgeInsets.all(12),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Text('Departments', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+            ),
+          ),
           Expanded(
             child: ListView.builder(
               itemCount: departments.length,

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 
+import '../../../../core/logging/app_logger.dart';
 import '../../../events/domain/entities/event.dart';
 import '../../../events/domain/repositories/event_repository.dart';
 import '../../data/hive_event_repository.dart';
@@ -26,7 +27,11 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _initializeBox() async {
-    eventBox = await Hive.openBox<Event>('events');
+    if (Hive.isBoxOpen('events')) {
+      eventBox = Hive.box<Event>('events');
+    } else {
+      eventBox = await Hive.openBox<Event>('events');
+    }
     eventRepository = HiveEventRepository(eventBox!);
     setState(() {});
   }
@@ -38,7 +43,16 @@ class _HomeScreenState extends State<HomeScreen> {
     int cooldownSeconds,
     bool restrictDuplicateExit,
   ) async {
-    if (eventRepository == null) return;
+    if (eventRepository == null) {
+      _showMessage('Events are still loading. Please try again.');
+      return;
+    }
+
+    if (name.trim().isEmpty || venue.trim().isEmpty) {
+      _showMessage('Event name and venue are required.');
+      return;
+    }
+
     final event = Event(
       name: name.trim(),
       venue: venue.trim(),
@@ -48,8 +62,20 @@ class _HomeScreenState extends State<HomeScreen> {
       restrictDuplicateExit: restrictDuplicateExit,
     );
 
-    await eventRepository!.add(event);
-    setState(() {});
+    try {
+      await eventRepository!.add(event);
+      if (!mounted) return;
+      _showMessage('Event "${event.name}" created.');
+      setState(() {});
+    } catch (error, stackTrace) {
+      AppLogger.error(
+        'Failed to create event.',
+        tag: 'HomeScreen',
+        error: error,
+        stackTrace: stackTrace,
+      );
+      _showMessage('Failed to create event. Please try again.');
+    }
   }
 
   Future<void> deleteEvent(int index) async {
@@ -94,7 +120,7 @@ class _HomeScreenState extends State<HomeScreen> {
         ],
       ),
       body: ValueListenableBuilder<Box<Event>>(
-        valueListenable: eventBox?.listenable() ?? ValueNotifier(Hive.box<Event>('events')),
+        valueListenable: (eventBox ?? Hive.box<Event>('events')).listenable(),
         builder: (context, box, _) {
           if (eventBox == null) {
             return const Center(child: CircularProgressIndicator());
@@ -198,18 +224,20 @@ class _HomeScreenState extends State<HomeScreen> {
               child: const Text('Cancel'),
             ),
             TextButton(
-              onPressed: () {
+              onPressed: () async {
                 if (nameController.text.isEmpty || venueController.text.isEmpty) {
+                  _showMessage('Event name and venue are required.');
                   return;
                 }
                 final cooldown = int.tryParse(cooldownController.text.trim()) ?? 3;
-                createEvent(
+                await createEvent(
                   nameController.text,
                   venueController.text,
                   selectedMode,
                   cooldown < 0 ? 0 : cooldown,
                   restrictDuplicateExit,
                 );
+                if (!context.mounted) return;
                 Navigator.pop(context);
               },
               child: const Text('Create'),

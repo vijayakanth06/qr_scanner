@@ -1,0 +1,21 @@
+sequenceDiagram
+    autonumber
+    participant User
+    participant MobileApp
+    participant AttendanceFlow
+    participant LocalStore as Hive
+    participant RTDB as Firebase RTDB
+
+    User->>MobileApp: Scan QR code
+    MobileApp->>AttendanceFlow: handleScan(rollNo)
+    AttendanceFlow->>LocalStore: get student by rollNo
+    alt Local hit
+        LocalStore-->>AttendanceFlow: student profile
+    else Local miss
+        AttendanceFlow->>RTDB: fetch studentsByRoll/{rollNo}
+        RTDB-->>AttendanceFlow: student profile/null
+        AttendanceFlow->>LocalStore: cache student (if found)
+    end
+    AttendanceFlow->>LocalStore: record entry/exit attendee
+    AttendanceFlow-->>MobileApp: scan outcome + message
+    MobileApp-->>User: success/blocked/invalid feedback

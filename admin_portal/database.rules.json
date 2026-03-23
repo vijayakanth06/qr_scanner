@@ -3,7 +3,7 @@
     ".read": false,
     ".write": false,
     "studentsByRoll": {
-      ".read": "auth != null",
+      ".read": "auth != null && auth.token.admin === true",
       ".indexOn": ["branch", "yearOfStudy", "section"],
       "$rollNo": {
         ".write": "auth != null && auth.token.admin === true",
@@ -41,7 +41,7 @@
       }
     },
     "hierarchy": {
-      ".read": "auth != null",
+      ".read": "auth != null && auth.token.admin === true",
       "$branch": {
         "$year": {
           "$section": {
@@ -49,6 +49,39 @@
               ".write": "auth != null && auth.token.admin === true",
               ".validate": "newData.isBoolean() || newData.val() === null"
             }
+          }
+        }
+      }
+    },
+    "audit": {
+      ".read": "auth != null && auth.token.admin === true",
+      "studentMutations": {
+        "$entryId": {
+          ".write": "auth != null && auth.token.admin === true && !data.exists() && newData.exists()",
+          ".validate": "newData.hasChildren(['action','rollNo','actorUid','actorEmail','timestamp','before','after'])",
+          "action": {
+            ".validate": "newData.isString() && (newData.val() === 'create' || newData.val() === 'update' || newData.val() === 'delete')"
+          },
+          "rollNo": {
+            ".validate": "newData.isString() && newData.val().matches(/^[0-9]{2}[A-Z]{2,4}[0-9]{3}$/)"
+          },
+          "actorUid": {
+            ".validate": "newData.isString() && newData.val().length > 0"
+          },
+          "actorEmail": {
+            ".validate": "newData.isString() && newData.val().length > 0"
+          },
+          "timestamp": {
+            ".validate": "newData.isNumber()"
+          },
+          "before": {
+            ".validate": "newData.val() === null || newData.isMap()"
+          },
+          "after": {
+            ".validate": "newData.val() === null || newData.isMap()"
+          },
+          "$other": {
+            ".validate": "newData.val() === null || $other === 'sourceRoll' || $other === 'sourcePath'"
           }
         }
       }
