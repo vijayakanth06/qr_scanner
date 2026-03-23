@@ -1,21 +1,35 @@
 sequenceDiagram
     autonumber
-    participant User
-    participant MobileApp
-    participant AttendanceFlow
-    participant LocalStore as Hive
+    participant Staff as Event Staff
+    participant Scanner as BarcodeScannerScreen
+    participant Event as EventScreen
+    participant Repo as FirebaseStudentRepository
     participant RTDB as Firebase RTDB
+    participant Flow as AttendanceFlowService
+    participant Hive as Hive Attendees
 
-    User->>MobileApp: Scan QR code
-    MobileApp->>AttendanceFlow: handleScan(rollNo)
-    AttendanceFlow->>LocalStore: get student by rollNo
-    alt Local hit
-        LocalStore-->>AttendanceFlow: student profile
-    else Local miss
-        AttendanceFlow->>RTDB: fetch studentsByRoll/{rollNo}
-        RTDB-->>AttendanceFlow: student profile/null
-        AttendanceFlow->>LocalStore: cache student (if found)
+    Staff->>Scanner: Scan QR code
+    Scanner->>Event: onScanned(rollNo)
+    Event->>Event: normalize and cooldown check
+
+    alt Invalid or blocked
+        Event-->>Scanner: blocked or invalid result
+    else Continue
+        Event->>Event: check in-memory student cache
+        alt Cache miss
+            Event->>Repo: getByRollNumber(rollNo)
+            Repo->>RTDB: read studentsByRoll/{rollNo}
+            RTDB-->>Repo: student profile or null
+            Repo-->>Event: resolved student profile
+        else Cache hit
+            Event-->>Event: reuse cached profile
+        end
+
+        Event->>Event: resolve entry or exit action
+        Event->>Flow: recordAttendance(...)
+        Flow->>Hive: add or save attendee
+        Hive-->>Flow: persisted attendee
+        Flow-->>Event: success or blocked result
+        Event-->>Scanner: success or blocked message
+        Scanner-->>Staff: haptic plus visual feedback
     end
-    AttendanceFlow->>LocalStore: record entry/exit attendee
-    AttendanceFlow-->>MobileApp: scan outcome + message
-    MobileApp-->>User: success/blocked/invalid feedback

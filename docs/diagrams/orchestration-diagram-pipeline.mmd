@@ -1,19 +1,78 @@
-flowchart LR
-    A[Admin Portal Edit] --> B[Build Batch Updates]
-    B --> C[Write studentsByRoll]
-    B --> D[Write hierarchy index]
-    B --> E[Write audit/studentMutations append-only]
-    C --> F[Firebase RTDB]
-    D --> F
-    E --> F
+flowchart TB
+    subgraph Startup["App Bootstrap"]
+        Start[App Start]
+        Env[Load AppEnvironment]
+        FirebaseInit[Firebase Initialize]
+        Crash[Configure Crashlytics]
+        AnonymousAuth[Anonymous Sign In]
+        HiveInit[Open Hive Boxes]
+        DI[Setup GetIt Dependencies]
+    end
 
-    G[Mobile Scan] --> H[EventScreen Scan Flow]
-    H --> I[AttendanceFlowService]
-    I --> J[Hive attendees]
-    H --> K[FirebaseStudentRepository with retry/backoff]
-    K --> F
-    H --> L[Scan outcome to UI]
+    subgraph MobileFlow["Mobile Attendance Pipeline"]
+        Scan[Scan Barcode]
+        Normalize[Normalize Roll Number]
+        Valid{Valid QR Format}
+        Cooldown{Cooldown Active}
+        Memory{Student in Memory Cache}
+        Remote[RTDB Student Lookup]
+        Retry[Retry and Backoff]
+        Action{Scan Mode}
+        Prompt[Prompt Entry or Exit]
+        Record[AttendanceFlowService Record Attendance]
+        Local[(Hive Attendees)]
+        UI[Refresh Timeline and Attendee List]
+        Export[Optional Excel Export]
+    end
 
-    M[Bootstrap] --> N[Firebase init]
-    M --> O[Crashlytics handlers]
-    M --> P[DI container setup]
+    subgraph AdminFlow["Admin Portal Pipeline"]
+        AdminLogin[Admin Login]
+        Verify[Verify Admin Claim]
+        Load[Load Hierarchy and Section Data]
+        Edit[Inline Edit Paste or XLSX Import]
+        Build[Build Multi-path Updates]
+        Students[Write studentsByRoll]
+        Hierarchy[Write hierarchy]
+        Audit[Append audit/studentMutations]
+    end
+
+    RTDB[(Firebase Realtime Database)]
+
+    Start --> Env
+    Env --> FirebaseInit
+    FirebaseInit --> Crash
+    FirebaseInit --> AnonymousAuth
+    Env --> HiveInit
+    HiveInit --> DI
+
+    DI --> Scan
+    Scan --> Normalize
+    Normalize --> Valid
+    Valid -- No --> UI
+    Valid -- Yes --> Cooldown
+    Cooldown -- Yes --> UI
+    Cooldown -- No --> Memory
+    Memory -- Yes --> Action
+    Memory -- No --> Remote
+    Remote --> Retry
+    Retry --> RTDB
+    RTDB --> Action
+    Action -- Entry Only --> Record
+    Action -- Exit Only --> Record
+    Action -- Both --> Prompt
+    Prompt --> Record
+    Record --> Local
+    Local --> UI
+    UI --> Export
+
+    AdminLogin --> Verify
+    Verify --> Load
+    Load --> RTDB
+    Load --> Edit
+    Edit --> Build
+    Build --> Students
+    Build --> Hierarchy
+    Build --> Audit
+    Students --> RTDB
+    Hierarchy --> RTDB
+    Audit --> RTDB

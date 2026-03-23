@@ -1,17 +1,53 @@
-flowchart TD
-    A[Start Scan] --> B{QR Data Valid?}
-    B -- No --> C[Return Invalid Result]
-    B -- Yes --> D{Cooldown Active?}
-    D -- Yes --> E[Return Blocked Result]
-    D -- No --> F[Resolve Student Profile]
-    F --> G{Scan Mode}
-    G -->|Entry Only| H[Set Action Entry]
-    G -->|Exit Only| I[Set Action Exit]
-    G -->|Both| J[Prompt Action Entry or Exit]
-    H --> K[Record Attendance]
-    I --> K
-    J --> K
-    K --> L{Record Success?}
-    L -- No --> M[Return Blocked/Invalid Message]
-    L -- Yes --> N[Update Analytics]
-    N --> O[Return Success Result]
+flowchart LR
+    subgraph Mobile["Flutter Mobile App"]
+        Staff[Event Staff]
+        Home[Home Screen]
+        Event[Event Screen]
+        Scanner[Barcode Scanner]
+        Validate[Validate QR and Cooldown]
+        Resolve[Resolve Student Profile]
+        Action[Choose Entry or Exit]
+        Record[AttendanceFlowService]
+        Timeline[Recent Scan Timeline]
+        Export[Excel Export]
+    end
+
+    subgraph Local["On-Device Storage"]
+        HiveEvents[(Hive Events)]
+        HiveAttendees[(Hive Attendees)]
+        Prefs[(SharedPreferences Settings)]
+    end
+
+    subgraph Firebase["Firebase Services"]
+        Auth[Firebase Auth Anonymous]
+        RTDB[(Realtime Database studentsByRoll hierarchy audit)]
+    end
+
+    subgraph Admin["React Admin Portal"]
+        AdminUser[Admin User]
+        Login[Email and Password Login]
+        Claim[Admin Claim Check]
+        Editor[Hierarchy Editor and Import]
+    end
+
+    Staff --> Home
+    Home --> HiveEvents
+    Home --> Event
+    Event --> Scanner
+    Scanner --> Validate
+    Validate --> Resolve
+    Resolve -->|cache miss| Auth
+    Auth --> RTDB
+    RTDB --> Resolve
+    Resolve --> Action
+    Action --> Record
+    Record --> HiveAttendees
+    Event --> Prefs
+    HiveAttendees --> Timeline
+    Event --> Timeline
+    Event --> Export
+
+    AdminUser --> Login
+    Login --> Claim
+    Claim --> Editor
+    Editor --> RTDB
