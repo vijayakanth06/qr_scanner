@@ -75,10 +75,10 @@
             ".validate": "newData.isNumber()"
           },
           "before": {
-            ".validate": "newData.val() === null || newData.isMap()"
+            ".validate": "newData.val() === null || newData.hasChildren()"
           },
           "after": {
-            ".validate": "newData.val() === null || newData.isMap()"
+            ".validate": "newData.val() === null || newData.hasChildren()"
           },
           "$other": {
             ".validate": "newData.val() === null || $other === 'sourceRoll' || $other === 'sourcePath'"
