@@ -3,41 +3,10 @@
     ".read": false,
     ".write": false,
     "studentsByRoll": {
-      ".read": "auth != null && auth.token.admin === true",
-      ".indexOn": ["branch", "yearOfStudy", "section"],
+      ".read": true,
       "$rollNo": {
-        ".write": "auth != null && auth.token.admin === true",
-        ".validate": "newData.hasChildren(['rollNo','name','studentMobileNo','branch','yearOfStudy','section'])",
-        "rollNo": {
-          ".validate": "newData.isString() && newData.val().matches(/^[0-9]{2}[A-Z]{2,4}[0-9]{3}$/)"
-        },
-        "name": {
-          ".validate": "newData.isString() && newData.val().length > 0"
-        },
-        "studentMobileNo": {
-          ".validate": "newData.isString() && newData.val().length >= 10"
-        },
-        "branch": {
-          ".validate": "newData.isString() && newData.val().length > 0"
-        },
-        "yearOfStudy": {
-          ".validate": "newData.isString() && (newData.val() === 'I' || newData.val() === 'II' || newData.val() === 'III' || newData.val() === 'IV')"
-        },
-        "section": {
-          ".validate": "newData.isString() && newData.val().length > 0"
-        },
-        "gender": {
-          ".validate": "!newData.exists() || (newData.isString() && (newData.val() === 'MALE' || newData.val() === 'FEMALE' || newData.val() === ''))"
-        },
-        "hostellerDayScholar": {
-          ".validate": "!newData.exists() || (newData.isString() && (newData.val() === 'HOSTELLER' || newData.val() === 'DAY SCHOLAR' || newData.val() === ''))"
-        },
-        "parentMobileNo": {
-          ".validate": "!newData.exists() || (newData.isString())"
-        },
-        "$other": {
-          ".validate": "newData.val() === null || $other === 'updatedAt' || $other === 'updatedBy' || $other === '_sourceRoll'"
-        }
+        ".read": true,
+        ".write": true
       }
     },
     "hierarchy": {
