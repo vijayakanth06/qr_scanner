@@ -5,6 +5,8 @@ import 'package:flutter/services.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:vibration/vibration.dart';
 
+import '../../../../app/theme.dart';
+
 enum ScanOutcomeType {
   successEntry,
   successExit,
@@ -157,21 +159,19 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
     BuildContext context,
     ScanOutcomeType type,
   ) {
-    final scheme = Theme.of(context).colorScheme;
-    final successScheme = ColorScheme.fromSeed(seedColor: Colors.green);
     if (type == ScanOutcomeType.successEntry) {
-      return (successScheme.primary, successScheme.onPrimary, Icons.check_circle_outline, 'ENTRY');
+      return (const Color(0xFFF1F8E9), kSuccessColor, Icons.check_circle_outline, 'ENTRY');
     }
     if (type == ScanOutcomeType.successExit) {
-      return (scheme.error, scheme.onError, Icons.logout, 'EXIT');
+      return (const Color(0xFFF1F8E9), kSuccessColor, Icons.logout, 'EXIT');
     }
     if (type == ScanOutcomeType.blocked) {
-      return (scheme.secondary, scheme.onSecondary, Icons.block, 'BLOCKED');
+      return (const Color(0xFFFFF3E0), kErrorColor, Icons.block, 'BLOCKED');
     }
     if (type == ScanOutcomeType.invalid) {
-      return (scheme.errorContainer, scheme.onErrorContainer, Icons.error_outline, 'INVALID');
+      return (const Color(0xFFFFF3E0), kErrorColor, Icons.error_outline, 'INVALID');
     }
-    return (scheme.surfaceContainerHighest, scheme.onSurfaceVariant, Icons.info_outline, 'INFO');
+    return (kBackgroundColor, kPrimaryColor, Icons.info_outline, 'INFO');
   }
 
   String _compactLabel(ScanHandleResult result) {
@@ -201,11 +201,18 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
               decoration: BoxDecoration(
                 color: activeStyle.$1,
                 borderRadius: BorderRadius.circular(12),
-                boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 8)],
+                border: Border(left: BorderSide(color: activeStyle.$2, width: 4)),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Colors.black12,
+                    blurRadius: 8,
+                    offset: Offset(0, 2),
+                  ),
+                ],
               ),
               child: Row(
                 children: [
@@ -219,7 +226,10 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
                   Expanded(
                     child: Text(
                       _compactLabel(active),
-                      style: TextStyle(color: activeStyle.$2, fontWeight: FontWeight.w600),
+                      style: const TextStyle(
+                        color: kTextPrimaryColor,
+                        fontWeight: FontWeight.w600,
+                      ),
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                     ),
@@ -238,14 +248,15 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
                       builder: (context) {
                         final style = _styleForResult(context, item.type);
                         return Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                           decoration: BoxDecoration(
                             color: style.$1.withValues(alpha: 0.9),
                             borderRadius: BorderRadius.circular(999),
+                              border: Border.all(color: style.$2.withValues(alpha: 0.2)),
                           ),
                           child: Text(
                             '${style.$4}: ${item.scannedCode ?? '-'}',
-                            style: TextStyle(color: style.$2, fontWeight: FontWeight.w600),
+                              style: const TextStyle(color: kTextPrimaryColor, fontWeight: FontWeight.w600),
                           ),
                         );
                       },
@@ -272,8 +283,16 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.surfaceContainerHighest,
+            color: kBackgroundColor,
             borderRadius: BorderRadius.circular(999),
+            border: const Border.fromBorderSide(BorderSide(color: kBorderColor)),
+            boxShadow: const [
+              BoxShadow(
+                color: Colors.black12,
+                blurRadius: 8,
+                offset: Offset(0, 2),
+              ),
+            ],
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
@@ -283,11 +302,14 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
                 width: 14,
                 child: CircularProgressIndicator(
                   strokeWidth: 2,
-                  color: Theme.of(context).colorScheme.primary,
+                  color: kPrimaryColor,
                 ),
               ),
               const SizedBox(width: 8),
-              const Text('Processing...'),
+              const Text(
+                'Processing...',
+                style: TextStyle(color: kTextPrimaryColor),
+              ),
             ],
           ),
         ),
@@ -298,7 +320,18 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Scan Barcode')),
+      backgroundColor: kBackgroundColor,
+      appBar: AppBar(
+        backgroundColor: kBackgroundColor,
+        surfaceTintColor: Colors.transparent,
+        title: const Text('Scan Barcode'),
+        titleTextStyle: const TextStyle(
+          color: kTextPrimaryColor,
+          fontSize: 22,
+          fontWeight: FontWeight.bold,
+        ),
+        iconTheme: const IconThemeData(color: kPrimaryColor),
+      ),
       body: Stack(
         children: [
           MobileScanner(
@@ -312,12 +345,20 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
             child: Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: Colors.black87,
+                color: kBackgroundColor,
                 borderRadius: BorderRadius.circular(8),
+                border: const Border.fromBorderSide(BorderSide(color: kBorderColor)),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Colors.black12,
+                    blurRadius: 8,
+                    offset: Offset(0, 2),
+                  ),
+                ],
               ),
               child: const Text(
                 'Align the barcode within the frame and hold steady',
-                style: TextStyle(color: Colors.white, fontSize: 16),
+                style: TextStyle(color: kTextPrimaryColor, fontSize: 16),
                 textAlign: TextAlign.center,
               ),
             ),

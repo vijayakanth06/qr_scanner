@@ -90,7 +90,33 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   void _showMessage(String message) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    final lower = message.toLowerCase();
+    final isError = lower.contains('failed') || lower.contains('error') || lower.contains('denied');
+    final isSuccess = lower.contains('success') ||
+        lower.contains('synced') ||
+        lower.contains('saved') ||
+        lower.contains('updated') ||
+        lower.contains('completed');
+
+    final backgroundColor = isError
+        ? const Color(0xFFD32F2F)
+        : isSuccess
+            ? const Color(0xFF2E7D32)
+            : const Color(0xFF1565C0);
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          message,
+          style: const TextStyle(color: Colors.white),
+        ),
+        backgroundColor: backgroundColor,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        margin: const EdgeInsets.all(16),
+        duration: const Duration(seconds: 2),
+      ),
+    );
   }
 
   @override

@@ -4,10 +4,44 @@ import {
   signInWithEmailAndPassword,
   signOut,
 } from 'firebase/auth';
-import { get, ref, update } from 'firebase/database';
+import { get, onValue, ref, runTransaction, update } from 'firebase/database';
 import * as XLSX from 'xlsx';
 
 import { auth, db } from './firebase';
+
+const requiredEnvVars = [
+  'VITE_FIREBASE_API_KEY',
+  'VITE_FIREBASE_DATABASE_URL',
+  'VITE_FIREBASE_PROJECT_ID',
+];
+const missing = requiredEnvVars.filter((k) => !import.meta.env[k]);
+if (missing.length > 0) {
+  throw new Error(
+    `Missing required environment variables: ${missing.join(', ')}\n` +
+      'Copy admin_portal/.env.example to .env.local and fill in values.',
+  );
+}
+
+const COLLEGES = [
+  { id: 'kec', name: 'Kongu Engineering College', location: 'Erode, TN' },
+  { id: 'psg', name: 'PSG College of Technology', location: 'Coimbatore, TN' },
+  { id: 'cit', name: 'Coimbatore Institute of Technology', location: 'Coimbatore, TN' },
+];
+
+const versionToKey = (v) => v ? v.replace(/\./g, '_') : v;
+
+function compareVersionsDescending(a, b) {
+  const toTuple = (v) => {
+    const [majorRaw, patchRaw] = String(v ?? '').split('.');
+    const major = Number.parseInt(majorRaw ?? '0', 10) || 0;
+    const patch = Number.parseInt(patchRaw ?? '0', 10) || 0;
+    return [major, patch];
+  };
+  const [aMajor, aPatch] = toTuple(a);
+  const [bMajor, bPatch] = toTuple(b);
+  if (aMajor !== bMajor) return bMajor - aMajor;
+  return bPatch - aPatch;
+}
 
 const COLUMN_CONFIG = [
   { key: 'rollNo', label: 'Roll No', required: true },
@@ -161,6 +195,8 @@ function App() {
   const [authLoading, setAuthLoading] = useState(true);
   const [loginLoading, setLoginLoading] = useState(false);
   const [loginError, setLoginError] = useState('');
+  const [activeCollege, setActiveCollege] = useState('kec');
+  const collegeId = activeCollege;
 
   const [hierarchy, setHierarchy] = useState({});
   const [selected, setSelected] = useState({ branch: '', yearOfStudy: '', section: '' });
@@ -176,6 +212,16 @@ function App() {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
+
+  const [meta, setMeta] = useState(null);
+  const [versionHistory, setVersionHistory] = useState([]);
+  const [showHistory, setShowHistory] = useState(false);
+  const [rollbackVersion, setRollbackVersion] = useState('');
+
+  const currentCollege = useMemo(
+    () => COLLEGES.find((college) => college.id === activeCollege) ?? COLLEGES[0],
+    [activeCollege],
+  );
 
   function snapshotRows(sourceRows) {
     return sourceRows.map((row) => ({ ...row }));
@@ -303,7 +349,42 @@ function App() {
   useEffect(() => {
     if (!isAdmin) return;
     loadHierarchy();
-  }, [isAdmin]);
+    const metaRef = ref(db, `colleges/${collegeId}/meta`);
+    const off = onValue(metaRef, (snap) => {
+      setMeta(snap.exists() ? snap.val() : null);
+    });
+
+    const versionsRef = ref(db, `colleges/${collegeId}/versions`);
+    const offVersions = onValue(versionsRef, (snap) => {
+      if (!snap.exists()) {
+        setVersionHistory([]);
+        return;
+      }
+      const raw = snap.val() || {};
+      const entries = Object.entries(raw)
+        .map(([version, value]) => ({ version, metadata: value.metadata || {} }))
+        .sort((a, b) => compareVersionsDescending(a.version, b.version));
+      setVersionHistory(entries);
+    });
+
+    return () => {
+      off();
+      offVersions();
+    };
+  }, [isAdmin, collegeId]);
+
+  useEffect(() => {
+    setSelected({ branch: '', yearOfStudy: '', section: '' });
+    setRows([]);
+    setOriginalRowsByRoll({});
+    setDeletedRolls(new Set());
+    setUndoStack([]);
+    setRedoStack([]);
+    setSearchRoll('');
+    setPasteData('');
+    setMessage('');
+    setError('');
+  }, [activeCollege]);
 
   useEffect(() => {
     const onKeyDown = (event) => {
@@ -328,7 +409,7 @@ function App() {
   }, [undoStack, redoStack, rows, deletedRolls]);
 
   async function loadHierarchy() {
-    const snap = await get(ref(db, 'hierarchy'));
+    const snap = await get(ref(db, `colleges/${collegeId}/hierarchy`));
     setHierarchy(snap.exists() ? snap.val() : {});
   }
 
@@ -338,7 +419,7 @@ function App() {
     setMessage('');
 
     try {
-      const sectionPath = `hierarchy/${branch}/${yearOfStudy}/${section}`;
+      const sectionPath = `colleges/${collegeId}/hierarchy/${branch}/${yearOfStudy}/${section}`;
       const sectionSnap = await get(ref(db, sectionPath));
       const rollNos = sectionSnap.exists() ? Object.keys(sectionSnap.val()) : [];
 
@@ -354,7 +435,7 @@ function App() {
 
       const studentReads = await Promise.all(
         rollNos.map(async (roll) => {
-          const studentSnap = await get(ref(db, `studentsByRoll/${roll}`));
+          const studentSnap = await get(ref(db, `colleges/${collegeId}/studentsByRoll/${roll}`));
           if (!studentSnap.exists()) {
             return normalizeStudent({ rollNo: roll }, { branch, yearOfStudy, section });
           }
@@ -504,15 +585,15 @@ function App() {
       const pushAudit = (entry) => {
         auditCounter += 1;
         const auditId = `${now}_${auditCounter}_${entry.action}_${entry.rollNo}`;
-        updates[`audit/studentMutations/${auditId}`] = entry;
+        updates[`colleges/${collegeId}/audit/studentMutations/${auditId}`] = entry;
       };
 
       for (const oldRoll of deletedRolls) {
         const old = originalRowsByRoll[oldRoll];
         if (!old) continue;
         const before = toPersistedStudentShape(old);
-        updates[`studentsByRoll/${oldRoll}`] = null;
-        updates[`hierarchy/${old.branch}/${old.yearOfStudy}/${old.section}/${oldRoll}`] = null;
+        updates[`colleges/${collegeId}/studentsByRoll/${oldRoll}`] = null;
+        updates[`colleges/${collegeId}/hierarchy/${old.branch}/${old.yearOfStudy}/${old.section}/${oldRoll}`] = null;
         pushAudit(
           makeAuditEntry({
             action: 'delete',
@@ -545,9 +626,9 @@ function App() {
         const original = originalRowsByRoll[sourceRoll] || originalRowsByRoll[rollNo];
         const persistedOriginal = original ? toPersistedStudentShape(original) : null;
         if (sourceRoll && sourceRoll !== rollNo && original) {
-          updates[`studentsByRoll/${sourceRoll}`] = null;
+          updates[`colleges/${collegeId}/studentsByRoll/${sourceRoll}`] = null;
           updates[
-            `hierarchy/${original.branch}/${original.yearOfStudy}/${original.section}/${sourceRoll}`
+            `colleges/${collegeId}/hierarchy/${original.branch}/${original.yearOfStudy}/${original.section}/${sourceRoll}`
           ] = null;
         }
         if (
@@ -557,11 +638,11 @@ function App() {
             original.section !== normalized.section)
         ) {
           updates[
-            `hierarchy/${original.branch}/${original.yearOfStudy}/${original.section}/${original.rollNo}`
+            `colleges/${collegeId}/hierarchy/${original.branch}/${original.yearOfStudy}/${original.section}/${original.rollNo}`
           ] = null;
         }
 
-        updates[`studentsByRoll/${rollNo}`] = {
+        updates[`colleges/${collegeId}/studentsByRoll/${rollNo}`] = {
           rollNo: persistedNormalized.rollNo,
           name: persistedNormalized.name,
           studentMobileNo: persistedNormalized.studentMobileNo,
@@ -574,7 +655,9 @@ function App() {
           updatedAt: persistedNormalized.updatedAt,
           updatedBy: persistedNormalized.updatedBy,
         };
-        updates[`hierarchy/${normalized.branch}/${normalized.yearOfStudy}/${normalized.section}/${rollNo}`] = true;
+        updates[
+          `colleges/${collegeId}/hierarchy/${normalized.branch}/${normalized.yearOfStudy}/${normalized.section}/${rollNo}`
+        ] = true;
 
         const changed = didStudentChange(persistedOriginal, persistedNormalized);
         if (changed) {
@@ -590,6 +673,42 @@ function App() {
           );
         }
       }
+
+      const metaRef = ref(db, `colleges/${collegeId}/meta/currentVersion`);
+      const txResult = await runTransaction(metaRef, (current) => {
+        const currentStr = typeof current === 'string' ? current : (current || '1.0');
+        const [majorStr, patchStr] = currentStr.split('.');
+        const major = Number.parseInt(majorStr || '1', 10) || 1;
+        const patch = Number.parseInt(patchStr || '0', 10) || 0;
+        const nextPatch = patch + 1;
+        return `${major}.${nextPatch}`;
+      });
+
+      if (!txResult.committed || !txResult.snapshot.exists()) {
+        throw new Error('Version bump transaction failed. No data was written.');
+      }
+
+      const nextVersion = txResult.snapshot.val();
+      const recordCount = rows.filter((r) => !String(r.rollNo || '').startsWith('NEW')).length;
+
+      updates[`colleges/${collegeId}/meta/currentVersion`] = nextVersion;
+      updates[`colleges/${collegeId}/meta/updatedAt`] = now;
+      updates[`colleges/${collegeId}/meta/updatedBy`] = auth.currentUser?.email ?? 'unknown';
+      updates[`colleges/${collegeId}/versions/${versionToKey(nextVersion)}/studentsByRoll`] =
+        rows
+          .filter((r) => !String(r.rollNo || '').startsWith('NEW'))
+          .reduce((acc, r) => {
+            const persisted = toPersistedStudentShape(r);
+            acc[persisted.rollNo] = persisted;
+            return acc;
+          }, {});
+      updates[`colleges/${collegeId}/versions/${versionToKey(nextVersion)}/metadata`] = {
+        version: nextVersion,
+        timestamp: now,
+        updatedBy: auth.currentUser?.email ?? 'unknown',
+        changeSummary: `Bulk save from admin portal (${recordCount} records)`,
+        recordCount,
+      };
 
       await update(ref(db), updates);
       await loadHierarchy();
@@ -645,24 +764,73 @@ function App() {
   }
 
   return (
-    <div className="page">
-      <header className="topbar">
-        <div>
-          <h1>Student Data Warehouse</h1>
-          <p>Hierarchy + Excel-style inline editing</p>
+    <div className="page" style={{ minHeight: '100vh', backgroundColor: '#F5F7FA' }}>
+      <aside
+        style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          bottom: 0,
+          width: 220,
+          backgroundColor: '#1565C0',
+          color: '#FFFFFF',
+          padding: '24px 14px',
+          overflowY: 'auto',
+        }}
+      >
+        <div style={{ fontSize: 20, fontWeight: 700, marginBottom: 20 }}>QR Scanner Admin</div>
+        <div style={{ display: 'grid', gap: 10 }}>
+          {COLLEGES.map((college) => {
+            const active = activeCollege === college.id;
+            return (
+              <button
+                key={college.id}
+                type="button"
+                onClick={() => setActiveCollege(college.id)}
+                style={{
+                  textAlign: 'left',
+                  border: 'none',
+                  borderRadius: 10,
+                  padding: '10px 12px',
+                  cursor: 'pointer',
+                  backgroundColor: active ? '#FFFFFF' : 'transparent',
+                  color: active ? '#1565C0' : '#FFFFFF',
+                  fontWeight: active ? 700 : 500,
+                }}
+              >
+                <div>{`🎓 ${college.name}`}</div>
+                <div style={{ fontSize: 12, opacity: active ? 0.85 : 0.9 }}>{`[${college.id}]`}</div>
+              </button>
+            );
+          })}
         </div>
-        <div className="topbar-actions">
-          <input
-            className="search-box"
-            placeholder="Search roll no"
-            value={searchRoll}
-            onChange={(e) => setSearchRoll(e.target.value)}
-          />
-          <button className="btn" onClick={() => signOut(auth)}>Sign out</button>
-        </div>
-      </header>
+      </aside>
 
-      <main className="layout">
+      <div style={{ marginLeft: 220, minHeight: '100vh', padding: 32 }}>
+        <header className="topbar">
+          <div>
+            <h1>{`${currentCollege.name} — Student Data Management`}</h1>
+            <p>
+              <span className="version-pill">
+                {`v${meta?.currentVersion ?? '1.0'} · ${meta?.recordCount ?? rows.length} students`}
+              </span>
+            </p>
+          </div>
+          <div className="topbar-actions">
+            <input
+              className="search-box"
+              placeholder="Search roll no"
+              value={searchRoll}
+              onChange={(e) => setSearchRoll(e.target.value)}
+            />
+            <button className="btn" type="button" onClick={() => setShowHistory(true)}>
+              Version history
+            </button>
+            <button className="btn" onClick={() => signOut(auth)}>Sign out</button>
+          </div>
+        </header>
+
+        <main className="layout">
         <aside className="sidebar">
           <h3>Department Hierarchy</h3>
           {Object.keys(hierarchy).length === 0 ? <p className="muted">No hierarchy data yet.</p> : null}
@@ -803,6 +971,87 @@ function App() {
           </div>
         </section>
       </main>
+      </div>
+
+      {showHistory && (
+        <div className="version-drawer">
+          <div className="version-drawer-inner">
+            <div className="version-drawer-header">
+              <h2>Version history</h2>
+              <button className="btn" type="button" onClick={() => setShowHistory(false)}>
+                Close
+              </button>
+            </div>
+            <table className="version-table">
+              <thead>
+                <tr>
+                  <th>Version</th>
+                  <th>Timestamp</th>
+                  <th>Updated By</th>
+                  <th>Summary</th>
+                  <th>Records</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {versionHistory.map(({ version, metadata }) => (
+                  <tr key={version}>
+                    <td>{version}</td>
+                    <td>{metadata.timestamp ? new Date(metadata.timestamp).toLocaleString() : '-'}</td>
+                    <td>{metadata.updatedBy || 'unknown'}</td>
+                    <td>{metadata.changeSummary || '-'}</td>
+                    <td>{metadata.recordCount ?? '-'}</td>
+                    <td>
+                      <button
+                        type="button"
+                        className="btn link-btn"
+                        disabled={rollbackVersion === version}
+                        onClick={async () => {
+                          if (rollbackVersion) return;
+                          if (!window.confirm(`Rollback to version ${version}?`)) return;
+                          try {
+                            setRollbackVersion(version);
+                            const snap = await get(
+                              ref(db, `colleges/${collegeId}/versions/${versionToKey(version)}/studentsByRoll`),
+                            );
+                            const students = snap.exists() ? snap.val() : {};
+                            const updates = {};
+                            updates[`colleges/${collegeId}/studentsByRoll`] = students;
+
+                            const nowTs = Date.now();
+                            updates[`colleges/${collegeId}/meta/currentVersion`] = version;
+                            updates[`colleges/${collegeId}/meta/updatedAt`] = nowTs;
+                            updates[`colleges/${collegeId}/meta/updatedBy`] =
+                              auth.currentUser?.email ?? 'unknown';
+                            updates[`colleges/${collegeId}/versions/${versionToKey(version)}/metadata`] = {
+                              ...(metadata || {}),
+                              version,
+                              timestamp: nowTs,
+                              updatedBy: auth.currentUser?.email ?? 'unknown',
+                              changeSummary: `Rollback to v${version}`,
+                              recordCount: students ? Object.keys(students).length : 0,
+                            };
+
+                            await update(ref(db), updates);
+                            alert(`Rolled back to version ${version}.`);
+                          } catch (rollbackErr) {
+                            console.error(rollbackErr);
+                            alert('Failed to rollback version.');
+                          } finally {
+                            setRollbackVersion('');
+                          }
+                        }}
+                      >
+                        {rollbackVersion === version ? 'Rolling back...' : 'Rollback'}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

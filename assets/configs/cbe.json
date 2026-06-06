@@ -1,0 +1,8 @@
+{
+  "collegeId": "cbe",
+  "collegeName": "Coimbatore Institute of Technology",
+  "logoUrl": "https://cdn.example.com/cbe-logo.png",
+  "firebaseDatabaseURL": "https://qr-saas-default-rtdb.asia-southeast1.firebasedatabase.app",
+  "idCardFormat": { "rollPattern": "^[0-9]{2}[A-Z]{3}[0-9]{3}$" },
+  "syncPolicy": { "maxIncrementalGap": 3, "cooldownSeconds": 10 }
+}

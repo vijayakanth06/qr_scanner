@@ -1,5 +1,7 @@
 {
   "projects": {
     "default": "qr-scanner-app-ca1fb"
-  }
+  },
+  "targets": {},
+  "etags": {}
 }

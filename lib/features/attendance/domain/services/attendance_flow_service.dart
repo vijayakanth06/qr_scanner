@@ -1,3 +1,12 @@
+import 'dart:async';
+
+import 'package:qr_scanner/core/config/college_config.dart';
+import 'package:qr_scanner/core/errors/result.dart';
+import 'package:qr_scanner/core/errors/scan_error.dart';
+
+import '../../../students/data/firebase_student_repository.dart';
+import '../../../students/domain/entities/student.dart';
+import '../../../students/domain/repositories/student_repository.dart';
 import '../entities/attendee.dart';
 import '../utils/roll_number_parser.dart';
 
@@ -32,11 +41,19 @@ abstract class AttendeeStore {
 }
 
 class AttendanceFlowService {
-  const AttendanceFlowService({required this.store});
+  const AttendanceFlowService({
+    required this.store,
+    required this.studentRepository,
+    required this.remoteStudentRepository,
+    required this.collegeConfig,
+  });
 
   final AttendeeStore store;
+  final StudentRepository studentRepository;
+  final FirebaseStudentRepository remoteStudentRepository;
+  final CollegeConfig collegeConfig;
 
-  Future<AttendanceResult> recordAttendance({
+  Future<Result<Attendee, ScanError>> recordAttendance({
     required String eventName,
     required String scannedValue,
     required AttendanceAction action,
@@ -44,19 +61,36 @@ class AttendanceFlowService {
     String? studentName,
     String? studentYearOfStudy,
     DateTime? timestamp,
+    bool isOnline = true,
   }) async {
     final now = timestamp ?? DateTime.now();
     final normalized = scannedValue.trim().toUpperCase();
 
-    if (!isValidRollNumber(normalized)) {
-      return const AttendanceResult(
-        success: false,
-        message: 'Invalid barcode format. Expected: 23ALR109',
-        code: AttendanceResultCode.invalidBarcode,
-      );
+    final rollPattern = RegExp(collegeConfig.idCardFormat.rollPattern);
+    if (!rollPattern.hasMatch(normalized)) {
+      return Err(MalformedInput(rawValue: scannedValue));
     }
 
     final rollInfo = parseRollNumber(normalized, departments);
+
+    // Resolve student profile from offline cache first.
+    Student? student = studentRepository.getByRollNumber(rollInfo.normalizedRollNumber);
+
+    if (student == null && isOnline) {
+      // Best-effort remote lookup when online and cache miss.
+      student = await remoteStudentRepository.getByRollNumber(rollInfo.normalizedRollNumber);
+      if (student != null) {
+        await studentRepository.upsertAll([student]);
+      }
+    }
+
+    if (student == null && !isOnline) {
+      return Err(OfflineLookupMiss(rollNo: rollInfo.normalizedRollNumber));
+    }
+
+    if (student == null) {
+      return Err(UnknownRoll(rollNo: rollInfo.normalizedRollNumber));
+    }
 
     if (action == AttendanceAction.entry) {
       final alreadyInside = store.all().any(
@@ -67,34 +101,24 @@ class AttendanceFlowService {
           );
 
       if (alreadyInside) {
-        return AttendanceResult(
-          success: false,
-          message:
-              'Entry already active for ${rollInfo.normalizedRollNumber}. Please record exit first.',
-          code: AttendanceResultCode.duplicateEntry,
-        );
+        return Err(DuplicateExit(rollNo: rollInfo.normalizedRollNumber));
       }
 
       final attendee = Attendee(
         id: rollInfo.normalizedRollNumber,
-        name: (studentName != null && studentName.trim().isNotEmpty)
+        name: studentName != null && studentName.trim().isNotEmpty
             ? studentName.trim()
-            : 'Unknown',
+            : (student.name.isNotEmpty ? student.name : 'Unknown'),
         batch: rollInfo.batchYear,
         department: rollInfo.department,
         inTime: now,
         outTime: null,
         eventName: eventName,
-        yearOfStudy: studentYearOfStudy,
+        yearOfStudy: studentYearOfStudy ?? student.yearOfStudy,
       );
 
       await store.add(attendee);
-      return AttendanceResult(
-        success: true,
-        message: 'Entry recorded for ${rollInfo.normalizedRollNumber}',
-        code: AttendanceResultCode.successEntry,
-        attendee: attendee,
-      );
+      return Ok(attendee);
     }
 
     final activeRecord = store
@@ -109,22 +133,13 @@ class AttendanceFlowService {
       ..sort((a, b) => b.inTime.compareTo(a.inTime));
 
     if (activeRecord.isEmpty) {
-      return AttendanceResult(
-        success: false,
-        message: 'No active entry found for ${rollInfo.normalizedRollNumber}.',
-        code: AttendanceResultCode.noActiveEntry,
-      );
+      return Err(DuplicateExit(rollNo: rollInfo.normalizedRollNumber));
     }
 
     final attendee = activeRecord.first;
     attendee.outTime = now;
     await store.save(attendee);
 
-    return AttendanceResult(
-      success: true,
-      message: 'Exit recorded for ${rollInfo.normalizedRollNumber}',
-      code: AttendanceResultCode.successExit,
-      attendee: attendee,
-    );
+    return Ok(attendee);
   }
 }

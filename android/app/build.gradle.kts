@@ -2,6 +2,7 @@
     id("com.android.application")
     id("kotlin-android")
     id("com.google.gms.google-services")
+    id("com.google.firebase.crashlytics")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
 }
@@ -31,11 +32,33 @@ android {
         versionName = flutter.versionName
     }
 
+    val releaseStorePassword = System.getenv("STORE_PASSWORD") ?: ""
+    val releaseKeyAlias = System.getenv("KEY_ALIAS") ?: ""
+    val releaseKeyPassword = System.getenv("KEY_PASSWORD") ?: ""
+    val hasReleaseSigningCredentials =
+        releaseStorePassword.isNotBlank() &&
+        releaseKeyAlias.isNotBlank() &&
+        releaseKeyPassword.isNotBlank() &&
+        file("release.keystore").exists()
+
+    signingConfigs {
+        create("release") {
+            storeFile = file("release.keystore")
+            storePassword = releaseStorePassword
+            keyAlias = releaseKeyAlias
+            keyPassword = releaseKeyPassword
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = if (hasReleaseSigningCredentials) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
+            isMinifyEnabled = false
+            isShrinkResources = false
         }
     }
 }

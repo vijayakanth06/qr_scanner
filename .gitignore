@@ -97,3 +97,7 @@ admin_portal/node_modules/
 admin_portal/dist/
 admin_portal/.env
 admin_portal/.env.*
+
+# Android signing
+android/app/release.keystore
+android/app/*.jks

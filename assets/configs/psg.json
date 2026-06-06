@@ -1,0 +1,8 @@
+{
+  "collegeId": "psg",
+  "collegeName": "PSG College of Technology",
+  "logoUrl": "https://cdn.example.com/psg-logo.png",
+  "firebaseDatabaseURL": "https://qr-saas-default-rtdb.asia-southeast1.firebasedatabase.app",
+  "idCardFormat": { "rollPattern": "^[0-9]{2}[A-Z]{2}[0-9]{3}$" },
+  "syncPolicy": { "maxIncrementalGap": 3, "cooldownSeconds": 10 }
+}
